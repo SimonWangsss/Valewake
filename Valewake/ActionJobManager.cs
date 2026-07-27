@@ -137,6 +137,12 @@ public sealed class ActionJobManager
             AnchorY = playerIsOnFarm ? (int)Game1.player.Tile.Y : -1,
             ReturnContext = new ActionReturnContext
             {
+                OriginKind = npc.currentLocation switch
+                {
+                    Farm => ActionOriginKinds.Farm,
+                    StardewValley.Locations.FarmHouse => ActionOriginKinds.FarmHouse,
+                    _ => ActionOriginKinds.Boundary
+                },
                 LocationName = npc.currentLocation?.NameOrUniqueName ?? "",
                 TileX = (int)npc.Tile.X,
                 TileY = (int)npc.Tile.Y,
@@ -295,13 +301,21 @@ public sealed class ActionJobManager
                 ReserveNpc(npc);
                 job.AnchorX = (int)Game1.player.Tile.X;
                 job.AnchorY = (int)Game1.player.Tile.Y;
-                Vector2 entry = FindFarmBoundaryEntry(farm);
+                Vector2 entry = job.ReturnContext.OriginKind == ActionOriginKinds.FarmHouse
+                    ? FindFarmHouseExteriorEntry(farm)
+                    : FindFarmBoundaryEntry(farm);
                 job.RuntimeDispatchTile = new ActionTile((int)entry.X, (int)entry.Y);
                 Game1.warpCharacter(npc, farm, entry);
                 Game1.addHUDMessage(new HUDMessage(
                     $"{npc.displayName} arrived at the farm and is walking to the work area."
                 ));
-                Transition(job, ActionJobStates.Preparing, "NPC entered through the farm boundary.");
+                Transition(
+                    job,
+                    ActionJobStates.Preparing,
+                    job.ReturnContext.OriginKind == ActionOriginKinds.FarmHouse
+                        ? "NPC came out through the farmhouse door."
+                        : "NPC entered through the farm boundary."
+                );
                 break;
 
             case ActionJobStates.Preparing:
@@ -384,7 +398,8 @@ public sealed class ActionJobManager
             npc.FacingDirection = FacingToward(stand, target);
             StartWorkAnimation(npc);
             Game1.playSound(job.Action == ActionIds.WaterCrops ? "wateringCan" : "cut");
-            job.RuntimeNextTick = Game1.ticks + 36;
+            job.RuntimeActionStartedTick = Game1.ticks;
+            job.RuntimeNextTick = Game1.ticks + 54;
             Transition(job, ActionJobStates.Acting, "Playing the work animation.");
             return;
         }
@@ -580,6 +595,23 @@ public sealed class ActionJobManager
         return new Vector2(64, 15);
     }
 
+    private static Vector2 FindFarmHouseExteriorEntry(Farm farm)
+    {
+        Point door = farm.GetMainFarmHouseEntry();
+        ActionTile[] candidates =
+        {
+            new(door.X, door.Y + 1),
+            new(door.X, door.Y + 2),
+            new(door.X, door.Y),
+            new(door.X - 1, door.Y + 1),
+            new(door.X + 1, door.Y + 1)
+        };
+        ActionTile? selected = candidates.FirstOrDefault(tile => IsWalkable(farm, tile));
+        return selected is null
+            ? FindFarmBoundaryEntry(farm)
+            : new Vector2(selected.X, selected.Y);
+    }
+
     private static IEnumerable<ActionTile> InwardWarpTiles(Farm farm, Warp warp)
     {
         int width = farm.Map.Layers[0].LayerWidth;
@@ -603,28 +635,27 @@ public sealed class ActionJobManager
     private void BeginReturn(ActionJob job, NPC npc, Farm farm, string workSummary)
     {
         npc.Sprite.ClearAnimation();
-        Vector2 destination;
-        if (job.ReturnContext.LocationName.Equals(
-            farm.NameOrUniqueName,
-            StringComparison.OrdinalIgnoreCase))
+        Vector2 destination = job.ReturnContext.OriginKind switch
         {
-            destination = new Vector2(job.ReturnContext.TileX, job.ReturnContext.TileY);
-        }
-        else
+            ActionOriginKinds.Farm =>
+                new Vector2(job.ReturnContext.TileX, job.ReturnContext.TileY),
+            ActionOriginKinds.FarmHouse =>
+                FindFarmHouseExteriorEntry(farm),
+            _ => FindFarmBoundaryEntry(farm)
+        };
+        job.RuntimeReturnCandidates = FindReturnCandidates(farm, destination, npc.Tile);
+        job.RuntimeReturnCandidateIndex = 0;
+        if (job.RuntimeReturnCandidates.Count == 0)
         {
-            destination = FindFarmBoundaryEntry(farm);
+            Fail(job, "No walkable return route endpoint was available.", terminal: false);
+            return;
         }
 
-        job.RuntimeReturnTile = new ActionTile((int)destination.X, (int)destination.Y);
-        job.RuntimePathStartedTick = Game1.ticks;
-        npc.controller = new PathFindController(
-            npc,
-            farm,
-            new Point(job.RuntimeReturnTile.X, job.RuntimeReturnTile.Y),
-            2
-        );
+        StartReturnPath(job, npc, farm);
         Game1.addHUDMessage(new HUDMessage(
-            $"{npc.displayName} finished the work and is leaving the farm."
+            job.ReturnContext.OriginKind == ActionOriginKinds.Farm
+                ? $"{npc.displayName} finished the work and is returning to where they started."
+                : $"{npc.displayName} finished the work and is leaving the farm."
         ));
         Transition(job, ActionJobStates.Returning, workSummary);
     }
@@ -644,13 +675,79 @@ public sealed class ActionJobManager
         bool timedOut =
             Game1.ticks - job.RuntimePathStartedTick >
             Math.Max(1800, config.ActionPathTimeoutTicks);
-        if (arrived || timedOut || npc.controller is null)
+        if (arrived)
         {
-            string suffix = arrived
-                ? " NPC reached the farm exit."
-                : " NPC schedule was restored after the return path ended.";
+            string suffix = job.ReturnContext.OriginKind switch
+            {
+                ActionOriginKinds.Farm => " NPC returned to the original farm position.",
+                ActionOriginKinds.FarmHouse => " NPC reached the farmhouse door.",
+                _ => " NPC reached the farm exit."
+            };
             Complete(job, job.LastMessage + suffix);
+            return;
         }
+        if (timedOut)
+        {
+            Fail(job, "NPC could not complete the return route before timeout.", terminal: false);
+            return;
+        }
+        if (npc.controller is null &&
+            Game1.ticks - job.RuntimePathStartedTick >= 15)
+        {
+            job.RuntimeReturnCandidateIndex++;
+            if (job.RuntimeReturnCandidateIndex >= job.RuntimeReturnCandidates.Count)
+            {
+                Fail(job, "NPC could not find a connected path back to the departure point.", terminal: false);
+                return;
+            }
+            StartReturnPath(job, npc, farm);
+            job.LastMessage = "Return path failed; trying another nearby exit tile.";
+            Save();
+            Trace(job, "return_path_retry");
+        }
+    }
+
+    private static List<ActionTile> FindReturnCandidates(
+        Farm farm,
+        Vector2 destination,
+        Vector2 npcTile)
+    {
+        List<ActionTile> candidates = new();
+        int centerX = (int)destination.X;
+        int centerY = (int)destination.Y;
+        for (int radius = 0; radius <= 3; radius++)
+        {
+            for (int y = centerY - radius; y <= centerY + radius; y++)
+            {
+                for (int x = centerX - radius; x <= centerX + radius; x++)
+                {
+                    if (Math.Abs(x - centerX) + Math.Abs(y - centerY) != radius)
+                        continue;
+                    ActionTile tile = new(x, y);
+                    if (IsWalkable(farm, tile))
+                        candidates.Add(tile);
+                }
+            }
+        }
+        return candidates
+            .DistinctBy(tile => (tile.X, tile.Y))
+            .OrderBy(tile => TileDistance(new Vector2(tile.X, tile.Y), destination))
+            .ThenBy(tile => TileDistance(new Vector2(tile.X, tile.Y), npcTile))
+            .ToList();
+    }
+
+    private static void StartReturnPath(ActionJob job, NPC npc, Farm farm)
+    {
+        ActionTile destination =
+            job.RuntimeReturnCandidates[job.RuntimeReturnCandidateIndex];
+        job.RuntimeReturnTile = destination;
+        job.RuntimePathStartedTick = Game1.ticks;
+        npc.controller = new PathFindController(
+            npc,
+            farm,
+            new Point(destination.X, destination.Y),
+            2
+        );
     }
 
     private static void StartWorkAnimation(NPC npc)
@@ -664,10 +761,12 @@ public sealed class ActionJobManager
         };
         npc.Sprite.setCurrentAnimation(new List<FarmerSprite.AnimationFrame>
         {
-            new(baseFrame + 1, 130),
-            new(baseFrame, 90),
-            new(baseFrame + 3, 130),
-            new(baseFrame, 90)
+            new(baseFrame + 1, 150),
+            new(baseFrame, 100),
+            new(baseFrame + 3, 150),
+            new(baseFrame + 1, 150),
+            new(baseFrame, 100),
+            new(baseFrame + 3, 150)
         });
     }
 
@@ -724,6 +823,12 @@ public sealed class ActionJobManager
         ParsedItemData wateringCan = ItemRegistry.GetDataOrErrorItem("(T)WateringCan");
         Texture2D texture = wateringCan.GetTexture();
         Microsoft.Xna.Framework.Rectangle source = wateringCan.GetSourceRect();
+        float progress = Math.Clamp(
+            (Game1.ticks - job.RuntimeActionStartedTick) / 54f,
+            0f,
+            1f
+        );
+        float pour = MathF.Sin(progress * MathF.PI);
         Vector2 worldPosition = npc.Position + (npc.FacingDirection switch
         {
             0 => new Vector2(24, -10),
@@ -731,11 +836,18 @@ public sealed class ActionJobManager
             3 => new Vector2(-8, 24),
             _ => new Vector2(30, 48)
         });
-        float rotation = npc.FacingDirection switch
+        worldPosition.Y -= pour * 8f;
+        float baseRotation = npc.FacingDirection switch
         {
             1 => 0.75f,
             3 => -0.75f,
             _ => 0f
+        };
+        float rotation = baseRotation + npc.FacingDirection switch
+        {
+            1 => pour * 0.8f,
+            3 => -pour * 0.8f,
+            _ => pour * 0.55f
         };
         SpriteEffects effects = npc.FacingDirection == 3
             ? SpriteEffects.FlipHorizontally
@@ -751,6 +863,54 @@ public sealed class ActionJobManager
             effects,
             Math.Min(1f, (npc.StandingPixel.Y + 64) / 10000f)
         );
+
+        if (progress >= 0.35f &&
+            job.CurrentTargetIndex < job.Targets.Count)
+        {
+            DrawWaterDrops(spriteBatch, job, worldPosition, progress, npc);
+        }
+    }
+
+    private static void DrawWaterDrops(
+        SpriteBatch spriteBatch,
+        ActionJob job,
+        Vector2 canWorldPosition,
+        float progress,
+        NPC npc)
+    {
+        ActionTile target = job.Targets[job.CurrentTargetIndex];
+        Vector2 start = Game1.GlobalToLocal(
+            Game1.viewport,
+            canWorldPosition + new Vector2(8, 16)
+        );
+        Vector2 end = Game1.GlobalToLocal(
+            Game1.viewport,
+            new Vector2(target.X * 64 + 32, target.Y * 64 + 32)
+        );
+        float streamProgress = (progress - 0.35f) / 0.65f;
+        float depth = Math.Min(1f, (npc.StandingPixel.Y + 65) / 10000f);
+        for (int index = 0; index < 4; index++)
+        {
+            float amount = (streamProgress + index * 0.2f) % 1f;
+            Vector2 position = Vector2.Lerp(start, end, amount);
+            position.Y -= MathF.Sin(amount * MathF.PI) * 18f;
+            Microsoft.Xna.Framework.Rectangle drop = new(
+                (int)position.X,
+                (int)position.Y,
+                5,
+                9
+            );
+            spriteBatch.Draw(
+                Game1.staminaRect,
+                drop,
+                null,
+                Color.CornflowerBlue * 0.9f,
+                0f,
+                Vector2.Zero,
+                SpriteEffects.None,
+                depth
+            );
+        }
     }
 
     private void Complete(ActionJob job, string message)
@@ -818,11 +978,14 @@ public sealed class ActionJobManager
             save_id = job.SaveId,
             npc_name = job.NpcName,
             action = job.Action,
+            origin_kind = job.ReturnContext.OriginKind,
             state = job.State,
             completed_targets = job.CompletedTargets,
             failed_targets = job.FailedTargets,
             target_count = job.Targets.Count,
             current_target = currentTarget,
+            dispatch_tile = job.RuntimeDispatchTile,
+            return_tile = job.RuntimeReturnTile,
             npc_location = npc?.currentLocation?.NameOrUniqueName,
             npc_tile = npc is null ? null : new { x = (int)npc.Tile.X, y = (int)npc.Tile.Y },
             message = job.LastMessage

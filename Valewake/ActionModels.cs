@@ -27,6 +27,13 @@ public static class ActionJobStates
         state is Completed or Cancelled or FailedRecoverable or FailedTerminal;
 }
 
+public static class ActionOriginKinds
+{
+    public const string Farm = "farm";
+    public const string FarmHouse = "farmhouse";
+    public const string Boundary = "boundary";
+}
+
 public sealed class ActionJobSaveData
 {
     public int SchemaVersion { get; set; } = 1;
@@ -79,6 +86,15 @@ public sealed class ActionJob
 
     [JsonIgnore]
     public ActionTile? RuntimeDispatchTile { get; set; }
+
+    [JsonIgnore]
+    public List<ActionTile> RuntimeReturnCandidates { get; set; } = new();
+
+    [JsonIgnore]
+    public int RuntimeReturnCandidateIndex { get; set; }
+
+    [JsonIgnore]
+    public long RuntimeActionStartedTick { get; set; }
 }
 
 public sealed class ActionTile
@@ -99,6 +115,7 @@ public sealed class ActionTile
 
 public sealed class ActionReturnContext
 {
+    public string OriginKind { get; set; } = ActionOriginKinds.Boundary;
     public string LocationName { get; set; } = "";
     public int TileX { get; set; }
     public int TileY { get; set; }
