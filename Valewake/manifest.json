@@ -1,0 +1,10 @@
+{
+  "Name": "Valewake",
+  "Author": "Simon",
+  "Version": "0.8.0",
+  "Description": "Memory-aware AI dialogue for every social NPC, with bounded perception, character lore, relationship policy, and evaluation traces.",
+  "UniqueID": "Simon.Valewake",
+  "EntryDll": "Valewake.dll",
+  "MinimumApiVersion": "4.0.0",
+  "UpdateKeys": []
+}

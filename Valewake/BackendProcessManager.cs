@@ -6,7 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using StardewModdingAPI;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
 /// <summary>Starts and owns the bundled local agent backend when one isn't already running.</summary>
 public sealed class BackendProcessManager : IDisposable

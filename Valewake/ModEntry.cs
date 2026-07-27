@@ -10,9 +10,9 @@ using StardewModdingAPI.Events;
 using StardewValley;
 using StardewValley.Menus;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
-/// <summary>Main SMAPI entry point for the Stardew Agent Framework prototype.</summary>
+/// <summary>Main SMAPI entry point for Valewake.</summary>
 public sealed class ModEntry : Mod
 {
     private ModConfig Config = new();
@@ -34,7 +34,7 @@ public sealed class ModEntry : Mod
 
         if (!Config.EnableMod)
         {
-            Monitor.Log("Stardew Agent Framework is disabled in config.json.", LogLevel.Info);
+            Monitor.Log("Valewake is disabled in config.json.", LogLevel.Info);
             return;
         }
 
@@ -60,14 +60,14 @@ public sealed class ModEntry : Mod
 
         helper.ConsoleCommands.Add(
             Config.ChatCommandName,
-            $"Send a message to the configured AI NPC. Stand near {Config.TargetNpcName}. Usage: {Config.ChatCommandName} <message>",
+            $"Send a message to the nearest supported NPC. Usage: {Config.ChatCommandName} <message>",
             OnChatCommand
         );
 
         Monitor.Log(
-            "Stardew Agent Framework loaded. Use '" + Config.StateCommandName +
-            "' for state or '" + Config.ChatCommandName + " <message>' near " +
-            Config.TargetNpcName + " for AI chat. Right-click the NPC for continuous dialogue.",
+            "Valewake loaded. Use '" + Config.StateCommandName +
+            "' for state or '" + Config.ChatCommandName +
+            " <message>' near a social NPC. Right-click any supported NPC for continuous dialogue.",
             LogLevel.Info
         );
     }
@@ -211,7 +211,7 @@ public sealed class ModEntry : Mod
         if (npc is null)
         {
             Monitor.Log(
-                $"Move within {Config.NpcInteractionRadiusTiles} tiles of {Config.TargetNpcName} before using {Config.ChatCommandName}.",
+                $"Move within {Config.NpcInteractionRadiusTiles} tiles of a social NPC before using {Config.ChatCommandName}.",
                 LogLevel.Warn
             );
             return;
@@ -246,10 +246,10 @@ public sealed class ModEntry : Mod
         {
             mainThreadActions.Enqueue(() =>
             {
-                NPC? currentNpc = FindTargetNpcInCurrentLocation() ?? npc;
+                NPC? currentNpc = FindNpcInCurrentLocation(npc.Name) ?? npc;
                 ShowNpcDialogue(
                     currentNpc,
-                    "Sorry, I can't start the farmhand brain right now. Please check the SMAPI log.",
+                    "Sorry, I can't collect my thoughts right now. Please check the SMAPI log.",
                     continueConversation && IsActiveChatNpc(currentNpc)
                         ? () => OpenChatInput(currentNpc)
                         : null
@@ -268,6 +268,12 @@ public sealed class ModEntry : Mod
             {
                 name = npc.Name,
                 display_name = npc.displayName,
+                age_group = npc.Age switch
+                {
+                    2 => "child",
+                    1 => "teen",
+                    _ => "adult"
+                },
                 location = npc.currentLocation?.NameOrUniqueName ?? "",
                 tile_x = (int)npc.Tile.X,
                 tile_y = (int)npc.Tile.Y
@@ -284,7 +290,7 @@ public sealed class ModEntry : Mod
         {
             PlayerInput = playerInput,
             GameState = gameState,
-            SessionId = $"{Constants.SaveFolderName}:{Config.TargetNpcName}",
+            SessionId = $"{Constants.SaveFolderName}:{npc.Name}",
             ConversationHistory = recentHistory
                 .TakeLast(Math.Max(2, Config.MaxConversationHistoryMessages))
                 .ToList(),
@@ -295,7 +301,7 @@ public sealed class ModEntry : Mod
         {
             AgentChatResponse response = await backendClient.SendChatAsync(request);
             Monitor.Log(
-                $"AI chat response from {Config.TargetNpcName}. Turn={response.TurnId}, Lore={response.RetrievedLore.Count}, " +
+                $"AI chat response from {npc.Name}. Turn={response.TurnId}, Lore={response.RetrievedLore.Count}, " +
                 $"Memory={response.RetrievedMemory.Count}, SavedMemory={response.SavedMemories.Count}, " +
                 $"Relationship={response.RelationshipEffect.Valence}/{response.RelationshipEffect.Intensity}, " +
                 $"Emotion={response.Emotion}",
@@ -314,7 +320,7 @@ public sealed class ModEntry : Mod
             {
                 if (!Context.IsWorldReady)
                     return;
-                NPC? currentNpc = FindTargetNpcInCurrentLocation() ?? npc;
+                NPC? currentNpc = FindNpcInCurrentLocation(npc.Name) ?? npc;
                 RelationshipApplicationResult? relationshipResult = relationshipManager?.Apply(
                     currentNpc,
                     response.RelationshipEffect
@@ -337,10 +343,10 @@ public sealed class ModEntry : Mod
             Monitor.Log($"AI chat request failed: {ex.Message}", LogLevel.Error);
             mainThreadActions.Enqueue(() =>
             {
-                NPC? currentNpc = FindTargetNpcInCurrentLocation() ?? npc;
+                NPC? currentNpc = FindNpcInCurrentLocation(npc.Name) ?? npc;
                 ShowNpcDialogue(
                     currentNpc,
-                    "Sorry, I can't reach the farmhand brain right now.",
+                    "Sorry, I can't collect my thoughts right now.",
                     continueConversation && IsActiveChatNpc(currentNpc)
                         ? () => OpenChatInput(currentNpc)
                         : null
@@ -441,7 +447,12 @@ public sealed class ModEntry : Mod
     }
 
     private bool IsConfiguredTarget(NPC npc) =>
-        string.Equals(npc.Name, Config.TargetNpcName, StringComparison.OrdinalIgnoreCase);
+        Config.EnableAllSocialNpcs
+            ? npc.CanSocialize && !Config.ExcludedNpcNames.Contains(
+                npc.Name,
+                StringComparer.OrdinalIgnoreCase
+            )
+            : string.Equals(npc.Name, Config.TargetNpcName, StringComparison.OrdinalIgnoreCase);
 
     private static int TileDistance(Vector2 left, Vector2 right) =>
         Math.Max(Math.Abs((int)left.X - (int)right.X), Math.Abs((int)left.Y - (int)right.Y));
@@ -470,19 +481,17 @@ public sealed class ModEntry : Mod
 
     private NPC? FindNearbyTargetNpc()
     {
-        NPC? npc = FindTargetNpcInCurrentLocation();
-        if (npc is null)
-            return null;
-
-        int dx = Math.Abs((int)npc.Tile.X - (int)Game1.player.Tile.X);
-        int dy = Math.Abs((int)npc.Tile.Y - (int)Game1.player.Tile.Y);
-        return Math.Max(dx, dy) <= Config.NpcInteractionRadiusTiles ? npc : null;
+        return Game1.currentLocation?.characters
+            .Where(IsConfiguredTarget)
+            .Where(npc => TileDistance(npc.Tile, Game1.player.Tile) <= Config.NpcInteractionRadiusTiles)
+            .OrderBy(npc => TileDistance(npc.Tile, Game1.player.Tile))
+            .FirstOrDefault();
     }
 
-    private NPC? FindTargetNpcInCurrentLocation()
+    private static NPC? FindNpcInCurrentLocation(string npcName)
     {
         return Game1.currentLocation?.characters
-            .FirstOrDefault(npc => string.Equals(npc.Name, Config.TargetNpcName, StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(npc => string.Equals(npc.Name, npcName, StringComparison.OrdinalIgnoreCase));
     }
 
     private static void ShowNpcDialogue(NPC npc, string text, Action? onFinish = null)

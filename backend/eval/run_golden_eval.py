@@ -561,7 +561,7 @@ def main() -> int:
                 "details": details,
             })
 
-    manifest_path = BACKEND_ROOT.parent / "StardewAgentFramework" / "manifest.json"
+    manifest_path = BACKEND_ROOT.parent / "Valewake" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     cases_digest = hashlib.sha256(cases_path.read_bytes()).hexdigest()
     generated_at = datetime.now(timezone.utc)

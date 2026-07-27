@@ -1,4 +1,6 @@
-namespace StardewAgentFramework;
+using System;
+
+namespace Valewake;
 
 public sealed class ModConfig
 {
@@ -7,10 +9,13 @@ public sealed class ModConfig
     public string BackendUrl { get; set; } = "http://127.0.0.1:8010/chat";
     public string BackendHealthUrl { get; set; } = "http://127.0.0.1:8010/health";
     public bool AutoStartBackend { get; set; } = true;
-    public string BackendExecutablePath { get; set; } = @"Backend\StardewAgentBackend.exe";
+    public string BackendExecutablePath { get; set; } = @"Backend\ValewakeBackend.exe";
     public string BackendWorkingDirectory { get; set; } = "Backend";
     public int BackendStartupTimeoutSeconds { get; set; } = 20;
-    public string AgentName { get; set; } = "FarmhandAgent";
+    public string AgentName { get; set; } = "Valewake";
+    public bool EnableAllSocialNpcs { get; set; } = true;
+    public string[] ExcludedNpcNames { get; set; } = Array.Empty<string>();
+    // Retained as a compatibility fallback when EnableAllSocialNpcs is false.
     public string TargetNpcName { get; set; } = "Abigail";
     public string StateCommandName { get; set; } = "agent_state";
     public string ChatCommandName { get; set; } = "agent_chat";

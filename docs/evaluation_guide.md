@@ -1,4 +1,4 @@
-# Stardew Agent Framework 测试与评估指南
+# Valewake 测试与评估指南
 
 > 适用版本：0.6.0+  
 > 测试角色：Abigail  

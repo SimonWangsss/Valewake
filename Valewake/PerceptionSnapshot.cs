@@ -7,7 +7,7 @@ using StardewValley.Locations;
 using StardewValley.TerrainFeatures;
 using SObject = StardewValley.Object;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
 public sealed class PerceptionSnapshot
 {

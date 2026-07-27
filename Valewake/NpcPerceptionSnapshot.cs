@@ -2,7 +2,7 @@ using System;
 using System.Linq;
 using StardewValley;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
 public sealed class NpcPerceptionSnapshot
 {

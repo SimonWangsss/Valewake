@@ -260,12 +260,15 @@ class RagStore:
         query: str,
         top_k: int,
         tags: list[str] | None = None,
+        npc_name: str = "",
     ) -> List[Dict[str, Any]]:
         context_tags = {str(tag).lower() for tag in (tags or [])}
         inferred_tags = topic_tags(query)
         query_tokens = token_list(query)
         scored: list[tuple[float, dict[str, Any]]] = []
         for index, chunk in enumerate(self.chunks):
+            if not self._is_chunk_allowed_for_npc(chunk, npc_name):
+                continue
             searchable = self._searchable_text(chunk)
             bm25 = self._bm25(query_tokens, self.document_tokens[index])
             lexical = score_text(query, searchable)
@@ -296,7 +299,7 @@ class RagStore:
             if score > 0.08:
                 scored.append((score, chunk))
         scored.sort(key=lambda item: item[0], reverse=True)
-        selected = self._with_parent_context(scored, max(0, top_k))
+        selected = self._with_parent_context(scored, max(0, top_k), npc_name)
         return [
             {
                 "id": str(chunk.get("id", "")),
@@ -318,6 +321,7 @@ class RagStore:
         self,
         scored: list[tuple[float, dict[str, Any]]],
         top_k: int,
+        npc_name: str = "",
     ) -> list[tuple[float, dict[str, Any]]]:
         if top_k <= 0:
             return []
@@ -333,7 +337,7 @@ class RagStore:
             parent_id = str(chunk.get("parent_id", ""))
             if parent_id and parent_id not in seen:
                 parent = self.chunks_by_id.get(parent_id)
-                if parent is not None:
+                if parent is not None and self._is_chunk_allowed_for_npc(parent, npc_name):
                     parent_score = scores_by_id.get(parent_id, score * 0.92)
                     selected.append((parent_score, parent))
                     seen.add(parent_id)
@@ -346,10 +350,29 @@ class RagStore:
             seen.add(chunk_id)
         return selected
 
-    def search(self, query: str, top_k: int, tags: list[str] | None = None) -> List[str]:
+    @staticmethod
+    def _is_chunk_allowed_for_npc(chunk: Dict[str, Any], npc_name: str) -> bool:
+        target = (npc_name or "").strip().lower()
+        explicit_npc = str(chunk.get("npc", "")).strip().lower()
+        if explicit_npc:
+            return not target or explicit_npc == target
+
+        # Legacy Abigail chunks predate the explicit npc field.
+        chunk_tags = {str(tag).lower() for tag in chunk.get("tags", [])}
+        if "abigail" in chunk_tags:
+            return not target or target == "abigail"
+        return True
+
+    def search(
+        self,
+        query: str,
+        top_k: int,
+        tags: list[str] | None = None,
+        npc_name: str = "",
+    ) -> List[str]:
         return [
             item["formatted"]
-            for item in self.search_details(query, top_k, tags)
+            for item in self.search_details(query, top_k, tags, npc_name)
         ]
 
 

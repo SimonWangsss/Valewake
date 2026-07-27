@@ -1,1 +1,1 @@
-"""Independent backend package for Stardew Agent Framework."""
+"""Independent backend package for Valewake."""

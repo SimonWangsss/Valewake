@@ -34,7 +34,7 @@ backend/data/test_runs/*
 !backend/data/test_runs/golden_eval_20260727T103718Z.json
 
 # Bundled runtime copied into the mod; rebuild it from backend source.
-StardewAgentFramework/Backend/
+Valewake/Backend/
 
 # Third-party research checkouts are documented but not vendored.
 references/

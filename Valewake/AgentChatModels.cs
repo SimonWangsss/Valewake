@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
 public sealed class AgentChatRequest
 {

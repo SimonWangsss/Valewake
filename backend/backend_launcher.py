@@ -6,7 +6,7 @@ from app import app
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Stardew Agent local backend")
+    parser = argparse.ArgumentParser(description="Valewake local backend")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8010)
     args = parser.parse_args()

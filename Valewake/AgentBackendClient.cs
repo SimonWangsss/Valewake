@@ -5,7 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
 public sealed class AgentBackendClient : IDisposable
 {

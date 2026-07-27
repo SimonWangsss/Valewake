@@ -1,4 +1,17 @@
-# Stardew Agent Framework 对话系统技术设计与实现总结
+# Valewake 对话系统技术设计与实现总结
+
+## 0.8.0 多 NPC 更新
+
+0.8.0 将原来的 Abigail 单角色接入改造成通用 NPC 对话层：
+
+- 所有 `CanSocialize` 的 NPC 默认启用右键连续 AI 对话；事件、节日、睡眠、送礼和不可社交角色继续走原版逻辑。
+- 新增 34 个基础游戏 NPC 的结构化 Persona Registry，包含身份、年龄组、性格、兴趣、关系、语言风格和硬边界。
+- 未登记的模组 NPC 使用保守的通用居民人格，因此 Content Pack 不会因为缺少 Valewake 配置而无法对话。
+- Persona 是每轮必需的身份上下文；详细 Lore 继续按需检索。
+- RAG 在排序前按当前 NPC 过滤专属 chunk，避免角色知识串线。
+- Session、Memory、Episode、Trace 和 Agent Relationship 都按“存档 + NPC”隔离。
+- Jas、Leo 和 Vincent 使用儿童硬边界，禁止浪漫、性化、操纵性或成人化对话。
+- 独立测试窗口可切换 NPC，不需要进入游戏即可比较人格和记忆隔离。
 
 ## 0.7.0 架构更新
 
@@ -18,11 +31,11 @@ MRR 从 `0.224` 提升到 `0.801`；完整 DeepSeek 生成回归从 `27/48`
 提升到 `37/48`，中文一致率达到 `48/48`。详见
 `docs/baseline_0.7.0_2026-07-27.md`。
 
-> 文档版本：0.7.0
-> 更新日期：2026-07-20  
-> 项目目录：`E:\Codex\ai-npc-3d-persona-memory\projects\StardewAgentFramework`  
+> 文档版本：0.8.0
+> 更新日期：2026-07-27
+> 项目目录：`E:\Codex\ai-npc-3d-persona-memory\projects\Valewake`
 > 当前目标：在不破坏《星露谷物语》原有进度系统的前提下，为 NPC 提供可感知、可记忆、受边界约束且可追踪评估的连续 LLM 对话。  
-> 当前角色：Abigail（阿比盖尔）。Action Agent 仅预留提案字段，不属于本阶段的已执行能力。
+> 当前角色：34 个基础游戏社交 NPC，并支持模组 NPC 回退。Action Agent 仅预留提案字段，不属于本阶段的已执行能力。
 
 ## 1. 文档目的
 
@@ -41,7 +54,7 @@ MRR 从 `0.224` 提升到 `0.801`；完整 DeepSeek 生成回归从 `27/48`
 ### 2.1 当前范围
 
 - 支持通过 SMAPI 在游戏中加载模组。
-- 支持对 Abigail 右键交互。
+- 支持对所有可社交 NPC 右键交互。
 - 默认保留当天第一次原版对话，随后进入自定义连续聊天。
 - 使用 DeepSeek 的 OpenAI-compatible API 生成结构化回复。
 - 使用游戏风格输入框、原版 NPC 肖像和表情 token 显示回复。
@@ -105,7 +118,7 @@ flowchart LR
 - 后续替换向量库、reranker、评估器时无需重写游戏模组。
 - API Key 保留在本机后端 `.env`，不进入 C# 配置和游戏日志。
 
-当前后端已由 PyInstaller 打包为单文件 `StardewAgentBackend.exe`。模组启动后先检查 `/health`，不可用时自动启动后端；只允许自动拉起 loopback 地址，以避免误启动远程程序。
+当前后端已由 PyInstaller 打包为单文件 `ValewakeBackend.exe`。模组启动后先检查 `/health`，不可用时自动启动后端；只允许自动拉起 loopback 地址，以避免误启动远程程序。
 
 ## 4. 技术栈与运行组件
 
@@ -920,15 +933,15 @@ ValleyTalk 当前重点仍是语言交互，不会因为 AI 回复自动重写 N
 
 | 文件 | 作用 |
 |---|---|
-| `StardewAgentFramework/ModEntry.cs` | 生命周期、输入 hook、对话流程与主线程调度 |
-| `StardewAgentFramework/ModConfig.cs` | 后端、目标 NPC、右键与关系规则配置 |
-| `StardewAgentFramework/AgentBackendClient.cs` | `/chat` HTTP 客户端与 JSON 契约 |
-| `StardewAgentFramework/BackendProcessManager.cs` | 后端健康检查、自动启动和退出清理 |
-| `StardewAgentFramework/NpcChatInputMenu.cs` | 游戏内连续聊天输入窗口 |
-| `StardewAgentFramework/PerceptionSnapshot.cs` | 完整 Agent 状态结构 |
-| `StardewAgentFramework/NpcPerceptionSnapshot.cs` | NPC 有限视野结构 |
-| `StardewAgentFramework/RelationshipManager.cs` | 好感证据验证、每日 cap 与状态写入 |
-| `StardewAgentFramework/manifest.json` | SMAPI 模组清单与版本 |
+| `Valewake/ModEntry.cs` | 生命周期、输入 hook、对话流程与主线程调度 |
+| `Valewake/ModConfig.cs` | 后端、目标 NPC、右键与关系规则配置 |
+| `Valewake/AgentBackendClient.cs` | `/chat` HTTP 客户端与 JSON 契约 |
+| `Valewake/BackendProcessManager.cs` | 后端健康检查、自动启动和退出清理 |
+| `Valewake/NpcChatInputMenu.cs` | 游戏内连续聊天输入窗口 |
+| `Valewake/PerceptionSnapshot.cs` | 完整 Agent 状态结构 |
+| `Valewake/NpcPerceptionSnapshot.cs` | NPC 有限视野结构 |
+| `Valewake/RelationshipManager.cs` | 好感证据验证、每日 cap 与状态写入 |
+| `Valewake/manifest.json` | SMAPI 模组清单与版本 |
 
 ### Python / Agent Kernel
 
@@ -953,19 +966,19 @@ ValleyTalk 当前重点仍是语言交互，不会因为 AI 回复自动重写 N
 ### 17.1 自动测试
 
 ```powershell
-cd E:\Codex\ai-npc-3d-persona-memory\projects\StardewAgentFramework\backend
+cd E:\Codex\ai-npc-3d-persona-memory\projects\Valewake\backend
 .\.venv\Scripts\python.exe .\eval\run_dialogue_eval.py
 .\.venv\Scripts\python.exe .\eval\run_golden_eval.py
 .\.venv\Scripts\python.exe .\eval\score_traces.py
 
-cd E:\Codex\ai-npc-3d-persona-memory\projects\StardewAgentFramework\StardewAgentFramework
+cd E:\Codex\ai-npc-3d-persona-memory\projects\Valewake\Valewake
 dotnet build
 ```
 
 ### 17.2 实机 smoke test
 
 1. 通过 SMAPI 启动 Stardew Valley。
-2. 确认控制台出现 StardewAgentFramework 加载和 backend healthy 信息。
+2. 确认控制台出现 Valewake 加载和 backend healthy 信息。
 3. 进入存档，找到 Abigail。
 4. 第一次右键确认仍出现原版对话。
 5. 再次右键确认出现连续输入窗口。

@@ -5,7 +5,7 @@ using Microsoft.Xna.Framework.Input;
 using StardewValley;
 using StardewValley.Menus;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
 public sealed class NpcChatInputMenu : IClickableMenu
 {

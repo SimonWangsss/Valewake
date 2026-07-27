@@ -3,10 +3,10 @@
     <TargetFramework>net6.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
-    <AssemblyName>StardewAgentFramework</AssemblyName>
-    <RootNamespace>StardewAgentFramework</RootNamespace>
-    <Version>0.7.0</Version>
-    <ModFolderName>StardewAgentFramework</ModFolderName>
+    <AssemblyName>Valewake</AssemblyName>
+    <RootNamespace>Valewake</RootNamespace>
+    <Version>0.8.0</Version>
+    <ModFolderName>Valewake</ModFolderName>
     <GamePath>E:\SteamLibrary\steamapps\common\Stardew Valley</GamePath>
   </PropertyGroup>
 
@@ -15,6 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Remove="Backend\StardewAgentBackend.exe" />
     <None Update="manifest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

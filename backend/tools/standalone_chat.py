@@ -19,10 +19,10 @@ from stardew_backend.agent import StardewAgent
 from stardew_backend.config import Settings
 
 
-class AbigailTestChat:
+class ValewakeTestChat:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("Stardew Agent Framework - Abigail Test Chat")
+        self.root.title("Valewake - Multi-NPC Test Chat")
         self.root.geometry("1320x820")
         self.root.minsize(1060, 680)
 
@@ -37,7 +37,12 @@ class AbigailTestChat:
         self.history: list[dict[str, str]] = []
         self.busy = False
 
-        self.session_var = tk.StringVar(value="standalone:abigail")
+        self.npc_names = sorted(
+            profile.get("name", key.title())
+            for key, profile in self.agent.personas.profiles.items()
+        )
+        self.npc_var = tk.StringVar(value="Abigail")
+        self.session_var = tk.StringVar(value="standalone:Abigail")
         self.player_var = tk.StringVar(value="TestFarmer")
         self.hearts_var = tk.IntVar(value=4)
         self.relationship_var = tk.StringVar(value="friends")
@@ -72,7 +77,7 @@ class AbigailTestChat:
 
         header = ttk.Frame(shell)
         header.pack(fill=tk.X, pady=(0, 10))
-        ttk.Label(header, text="Abigail 独立对话测试台", style="Title.TLabel").pack(side=tk.LEFT)
+        ttk.Label(header, text="Valewake 多 NPC 独立对话测试台", style="Title.TLabel").pack(side=tk.LEFT)
         ttk.Button(header, text="新测试会话", command=self.new_session).pack(side=tk.RIGHT)
         ttk.Button(header, text="清空屏幕", command=self.clear_chat).pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -143,6 +148,7 @@ class AbigailTestChat:
 
     def _build_context_form(self, parent: ttk.Frame) -> None:
         fields = [
+            ("NPC", self.npc_var, tuple(self.npc_names)),
             ("测试 Session", self.session_var, None),
             ("玩家名", self.player_var, None),
             ("关系状态", self.relationship_var, ("friends", "dating", "engaged", "married")),
@@ -199,7 +205,10 @@ class AbigailTestChat:
         hearts = max(0, int(self.hearts_var.get()))
         return {
             "source": "standalone_test_harness",
-            "npc": {"name": "Abigail", "display_name": "Abigail"},
+            "npc": {
+                "name": self.npc_var.get() or "Abigail",
+                "display_name": self.npc_var.get() or "Abigail",
+            },
             "npc_perception": {
                 "schemaVersion": "npc-perception-0.1",
                 "time": {
@@ -265,7 +274,7 @@ class AbigailTestChat:
     def _finish_chat(self, player_input: str, state: dict, result: dict) -> None:
         reply = str(result.get("reply", ""))
         emotion = str(result.get("emotion", "neutral"))
-        self._append_chat(f"Abigail [{emotion}]", reply, "npc")
+        self._append_chat(f"{self.npc_var.get()} [{emotion}]", reply, "npc")
         self.history.extend([
             {"role": "user", "content": player_input},
             {"role": "assistant", "content": reply},
@@ -316,13 +325,15 @@ class AbigailTestChat:
 
     def new_session(self) -> None:
         self.clear_chat()
-        self.session_var.set(f"standalone:{uuid4().hex[:8]}:Abigail")
+        self.session_var.set(
+            f"standalone:{uuid4().hex[:8]}:{self.npc_var.get() or 'Villager'}"
+        )
         self._append_chat("系统", "已创建新的隔离测试会话。", "system")
 
 
 def main() -> int:
     root = tk.Tk()
-    AbigailTestChat(root)
+    ValewakeTestChat(root)
     root.mainloop()
     return 0
 

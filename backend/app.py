@@ -27,7 +27,7 @@ class ChatResponse(BaseModel):
     debug_prompt: Optional[str] = None
 
 
-app = FastAPI(title="Stardew Agent Backend")
+app = FastAPI(title="Valewake Backend")
 settings = Settings.from_env()
 agent = StardewAgent(settings)
 
@@ -36,11 +36,12 @@ agent = StardewAgent(settings)
 def health() -> Dict[str, Any]:
     return {
         "ok": True,
-        "project": "stardew_agent_mod",
-        "version": "0.7.0",
-        "dialogue_system": "v3",
+        "project": "valewake",
+        "version": "0.8.0",
+        "dialogue_system": "v4-multi-npc",
         "memory_schema": 3,
         "lore_chunks": len(agent.rag.chunks),
+        "curated_npc_profiles": agent.personas.curated_count,
         "llm_backend": settings.llm_backend,
         "rag_dir": str(settings.rag_dir),
         "memory_path": str(settings.memory_path),

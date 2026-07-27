@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using StardewModdingAPI;
 using StardewValley;
 
-namespace StardewAgentFramework;
+namespace Valewake;
 
 public sealed class RelationshipManager
 {

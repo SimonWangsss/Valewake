@@ -27,6 +27,7 @@ class Settings:
     top_k_rag: int
     top_k_memory: int
     max_episodes_per_session: int
+    persona_path: Path = Path("./data/personas/stardew_npcs.json")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -43,4 +44,8 @@ class Settings:
             top_k_rag=int(os.getenv("STARDEW_TOP_K_RAG", "5")),
             top_k_memory=int(os.getenv("STARDEW_TOP_K_MEMORY", "4")),
             max_episodes_per_session=int(os.getenv("STARDEW_MAX_EPISODES_PER_SESSION", "80")),
+            persona_path=Path(os.getenv(
+                "STARDEW_PERSONA_PATH",
+                "./data/personas/stardew_npcs.json",
+            )),
         )

@@ -1,6 +1,6 @@
-# Stardew Agent Backend
+# Valewake Backend
 
-Independent FastAPI backend for `StardewAgentFramework`.
+Independent FastAPI backend for `Valewake`.
 
 It is intentionally separate from the earlier Unity/Yu Gong prototype. It has its own package, memory file, RAG folder, and prompts.
 
@@ -9,6 +9,8 @@ It is intentionally separate from the earlier Unity/Yu Gong prototype. It has it
 - `/chat` endpoint for the SMAPI mod.
 - Mock or OpenAI-compatible LLM client.
 - Per-save and per-NPC player memory in JSON schema v3.
+- Curated persona profiles for 34 base-game social NPCs and a bounded fallback for modded NPCs.
+- NPC-scoped Lore retrieval that prevents cross-character persona leakage.
 - Conversation, episodic, semantic-retrieval, and durable-profile memory layers.
 - Semantic deduplication, contradiction supersession, and grounded candidate validation.
 - Social-context analysis for repetition, time gaps, intimacy mismatch, and boundary pressure.
@@ -23,7 +25,7 @@ It is intentionally separate from the earlier Unity/Yu Gong prototype. It has it
 ## Setup
 
 ```powershell
-cd E:\Codex\ai-npc-3d-persona-memory\projects\StardewAgentFramework\backend
+cd E:\Codex\ai-npc-3d-persona-memory\projects\Valewake\backend
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
@@ -61,8 +63,8 @@ The backend never writes Stardew save data. It only proposes a relationship effe
 
 ## Run
 
-Normal installed-mod usage does not require this command. Version 0.4.0 packages the backend as
-`Mods/StardewAgentFramework/Backend/StardewAgentBackend.exe`; the SMAPI mod starts it automatically,
+Normal installed-mod usage does not require this command. The backend is packaged as
+`Mods/Valewake/Backend/ValewakeBackend.exe`; the SMAPI mod starts it automatically,
 checks `/health`, retries before chat, and stops only the process it owns when the game exits.
 
 Use the command below only for backend development:
@@ -123,16 +125,17 @@ the same test-set hash:
 .\.venv\Scripts\python.exe .\eval\compare_eval_reports.py <baseline.json> <candidate.json>
 ```
 
-## Standalone Abigail test window
+## Standalone multi-NPC test window
 
-Double-click `run_abigail_test_chat.cmd` in the project root, or run:
+Double-click `run_valewake_test_chat.cmd` in the project root, or run:
 
 ```powershell
 .\.venv\Scripts\python.exe .\tools\standalone_chat.py
 ```
 
 It uses the same Agent/Lore/Memory/Policy pipeline without starting Stardew
-Valley or FastAPI. Test memory and traces are isolated under `data/test_runs`.
+Valley or FastAPI. Select an NPC in the context panel. Test memory and traces
+are isolated under `data/test_runs`.
 
 ## Test
 
