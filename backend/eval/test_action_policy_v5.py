@@ -1,4 +1,6 @@
 import unittest
+import json
+from pathlib import Path
 
 from stardew_backend.action_policy import (
     normalize_action_proposal,
@@ -99,6 +101,30 @@ class ActionProposalTests(unittest.TestCase):
             "\u8bf7\u5e2e\u6211\u4e70\u79cd\u5b50",
         )
         self.assertIsNone(result)
+
+
+class ActionLoreConsistencyTests(unittest.TestCase):
+    def test_farm_action_lore_matches_executable_capabilities(self) -> None:
+        lore_path = (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "rag"
+            / "stardew"
+            / "social_policy_extended.jsonl"
+        )
+        chunks = [
+            json.loads(line)
+            for line in lore_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        chunk = next(
+            item
+            for item in chunks
+            if item["id"] == "action_farm_boundary_001"
+        )
+        self.assertIn("Watering and weeding are available", chunk["text"])
+        self.assertIn("Season alone does not prove", chunk["text"])
+        self.assertNotIn("cannot water", chunk["text"])
 
 
 if __name__ == "__main__":

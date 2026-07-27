@@ -300,7 +300,10 @@ class StardewAgent:
             "The player made a supported action request: "
             f"{action_request}. You must return action_proposal. Set disposition to "
             "accept only if the NPC willingly agrees; otherwise use refuse or negotiate. "
-            "Never claim the action already happened. "
+            "Never claim the action already happened. Season alone does not prove there "
+            "are no eligible targets: winter may still have greenhouse or special crops. "
+            "If the NPC cannot see the farm targets, say they can check instead of inventing "
+            "that none exist; the local executor makes the final target determination. "
             if action_request
             else "The player did not make a supported action request; action_proposal must be null. "
         )

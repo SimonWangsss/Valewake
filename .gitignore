@@ -38,3 +38,6 @@ Valewake/Backend/
 
 # Third-party research checkouts are documented but not vendored.
 references/
+
+# Public save files downloaded for local manual testing.
+test_saves/
