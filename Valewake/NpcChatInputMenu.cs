@@ -10,9 +10,11 @@ namespace Valewake;
 public sealed class NpcChatInputMenu : IClickableMenu
 {
     private const int PreferredWidth = 1100;
-    private const int MenuHeight = 320;
+    private const int MenuHeight = 360;
     private const int Margin = 32;
     private const int ButtonSize = 64;
+    private const int TitleTopPadding = 88;
+    private const int TextBoxTopPadding = 160;
     private readonly NPC npc;
     private readonly Action<string> onSubmit;
     private readonly Action onCancel;
@@ -36,7 +38,7 @@ public sealed class NpcChatInputMenu : IClickableMenu
         textBox = new TextBox(textBoxTexture, null, Game1.dialogueFont, Game1.textColor)
         {
             X = xPositionOnScreen + Margin,
-            Y = yPositionOnScreen + 120,
+            Y = yPositionOnScreen + TextBoxTopPadding,
             Width = width - Margin * 3 - ButtonSize,
             Height = 64,
             limitWidth = true
@@ -116,7 +118,7 @@ public sealed class NpcChatInputMenu : IClickableMenu
         b.DrawString(
             Game1.dialogueFont,
             title,
-            new Vector2(xPositionOnScreen + Margin, yPositionOnScreen + 60),
+            new Vector2(xPositionOnScreen + Margin, yPositionOnScreen + TitleTopPadding),
             Game1.textColor
         );
         textBox.Draw(b);

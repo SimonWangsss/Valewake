@@ -116,8 +116,19 @@ public sealed class ModEntry : Mod
             }
         }
 
-        if (pendingVanillaNpc is not null && !pendingVanillaDialogueSeen && Game1.ticks - pendingVanillaStartedTick > 30)
+        if (pendingVanillaNpc is not null &&
+            !pendingVanillaDialogueSeen &&
+            Game1.ticks - pendingVanillaStartedTick > 30)
+        {
+            NPC npc = pendingVanillaNpc;
             ClearPendingVanillaDialogue();
+            if (Game1.activeClickableMenu is null &&
+                Context.IsPlayerFree &&
+                CanStartAiDialogue(npc))
+            {
+                BeginChatSession(npc, "");
+            }
+        }
     }
 
     private void OnOneSecondUpdateTicked(object? sender, OneSecondUpdateTickedEventArgs e)
