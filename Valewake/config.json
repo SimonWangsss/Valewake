@@ -24,5 +24,16 @@
   "MaxAiFriendshipLossPerDay": 10,
   "MinimumRelationshipConfidence": 0.72,
   "ShowRelationshipFeedback": true,
-  "ShowNumericFriendshipChange": false
+  "ShowNumericFriendshipChange": false,
+  "EnableActionAgent": true,
+  "EnableWaterCropsAction": true,
+  "EnableClearWeedsAction": true,
+  "EnableCrossMapDispatch": true,
+  "MinimumActionHearts": 2,
+  "MinimumActionTrust": 0,
+  "MinimumActionConfidence": 0.65,
+  "MaxWaterTilesPerJob": 10,
+  "MaxWeedsPerJob": 10,
+  "ActionTargetRadiusTiles": 12,
+  "ActionPathTimeoutTicks": 600
 }

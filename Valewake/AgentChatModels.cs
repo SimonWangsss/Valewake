@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Valewake;
@@ -80,14 +81,29 @@ public sealed class RelationshipEffect
 
 public sealed class AgentActionProposal
 {
+    [JsonPropertyName("proposal_id")]
+    public string ProposalId { get; init; } = "";
+
     [JsonPropertyName("intent")]
     public string Intent { get; init; } = "";
 
     [JsonPropertyName("action")]
     public string Action { get; init; } = "";
 
+    [JsonPropertyName("disposition")]
+    public string Disposition { get; init; } = "refuse";
+
+    [JsonPropertyName("parameters")]
+    public Dictionary<string, JsonElement> Parameters { get; init; } = new();
+
+    [JsonPropertyName("confidence")]
+    public double Confidence { get; init; }
+
     [JsonPropertyName("reason")]
     public string Reason { get; init; } = "";
+
+    [JsonPropertyName("evidence")]
+    public string Evidence { get; init; } = "";
 
     [JsonPropertyName("requires_confirmation")]
     public bool RequiresConfirmation { get; init; }

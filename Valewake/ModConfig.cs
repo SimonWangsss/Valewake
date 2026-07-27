@@ -31,4 +31,15 @@ public sealed class ModConfig
     public double MinimumRelationshipConfidence { get; set; } = 0.72;
     public bool ShowRelationshipFeedback { get; set; } = true;
     public bool ShowNumericFriendshipChange { get; set; } = false;
+    public bool EnableActionAgent { get; set; } = true;
+    public bool EnableWaterCropsAction { get; set; } = true;
+    public bool EnableClearWeedsAction { get; set; } = true;
+    public bool EnableCrossMapDispatch { get; set; } = true;
+    public int MinimumActionHearts { get; set; } = 2;
+    public int MinimumActionTrust { get; set; } = 0;
+    public double MinimumActionConfidence { get; set; } = 0.65;
+    public int MaxWaterTilesPerJob { get; set; } = 10;
+    public int MaxWeedsPerJob { get; set; } = 10;
+    public int ActionTargetRadiusTiles { get; set; } = 12;
+    public int ActionPathTimeoutTicks { get; set; } = 600;
 }

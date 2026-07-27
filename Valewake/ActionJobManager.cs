@@ -1,0 +1,652 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using Microsoft.Xna.Framework;
+using StardewModdingAPI;
+using StardewValley;
+using StardewValley.Pathfinding;
+using StardewValley.TerrainFeatures;
+using StardewValley.Tools;
+using xTile.Dimensions;
+
+namespace Valewake;
+
+public sealed class ActionJobManager
+{
+    private const string SaveDataKey = "valewake-action-jobs-v1";
+    private static readonly HashSet<string> WeedIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "(O)0", "(O)2", "(O)4", "(O)6", "(O)8", "(O)10", "(O)12", "(O)14", "(O)16",
+        "(O)313", "(O)314", "(O)315", "(O)316", "(O)317", "(O)318", "(O)319"
+    };
+
+    private readonly IModHelper helper;
+    private readonly IMonitor monitor;
+    private readonly ModConfig config;
+    private readonly string tracePath;
+    private ActionJobSaveData data = new();
+
+    public ActionJobManager(IModHelper helper, IMonitor monitor, ModConfig config)
+    {
+        this.helper = helper;
+        this.monitor = monitor;
+        this.config = config;
+        tracePath = Path.Combine(helper.DirectoryPath, "data", "traces", "action_trace.jsonl");
+    }
+
+    public void Load()
+    {
+        data = helper.Data.ReadSaveData<ActionJobSaveData>(SaveDataKey) ?? new ActionJobSaveData();
+        foreach (ActionJob job in data.Jobs.Where(job => !ActionJobStates.IsTerminal(job.State)))
+        {
+            job.State = ActionJobStates.FailedRecoverable;
+            job.LastMessage = "The game was reloaded before the job completed.";
+            RestoreNpc(job);
+            Trace(job, "recovered_after_reload");
+        }
+        Save();
+    }
+
+    public ActionProposalDecision Evaluate(
+        AgentActionProposal proposal,
+        NPC npc,
+        string playerInput,
+        AgentRelationshipContext relationship)
+    {
+        if (!config.EnableActionAgent)
+            return ActionProposalDecision.Reject("Action Agent is disabled.");
+        if (!Context.IsMainPlayer)
+            return ActionProposalDecision.Reject("Only the multiplayer host can authorize NPC jobs.");
+        if (Game1.eventUp || Game1.currentLocation?.currentEvent is not null || Game1.isFestival())
+            return ActionProposalDecision.Reject("NPC jobs cannot start during an event or festival.");
+        if (npc.Age == 2)
+            return ActionProposalDecision.Reject("Child NPCs cannot be assigned farm jobs.");
+        if (!string.Equals(proposal.Disposition, "accept", StringComparison.OrdinalIgnoreCase))
+            return ActionProposalDecision.Reject($"{npc.displayName} did not accept the job.");
+        if (proposal.Confidence < config.MinimumActionConfidence)
+            return ActionProposalDecision.Reject("The action proposal was not confident enough.");
+        if (string.IsNullOrWhiteSpace(proposal.Evidence) ||
+            !playerInput.Contains(proposal.Evidence, StringComparison.OrdinalIgnoreCase))
+        {
+            return ActionProposalDecision.Reject("The proposal was not grounded in the player's request.");
+        }
+        if (Game1.timeOfDay >= 2200)
+            return ActionProposalDecision.Reject("It is too late to begin a farm job.");
+        if (GetActiveJob(npc.Name) is not null)
+            return ActionProposalDecision.Reject($"{npc.displayName} already has an active job.");
+
+        int hearts = 0;
+        if (Game1.player.friendshipData.TryGetValue(npc.Name, out Friendship? friendship))
+            hearts = friendship.Points / 250;
+        if (hearts < config.MinimumActionHearts)
+        {
+            return ActionProposalDecision.Reject(
+                $"This job requires at least {config.MinimumActionHearts} hearts."
+            );
+        }
+        if (relationship.Trust < config.MinimumActionTrust)
+        {
+            return ActionProposalDecision.Reject(
+                $"This job requires at least {config.MinimumActionTrust} Valewake trust."
+            );
+        }
+
+        int requestedMaximum = GetRequestedMaximum(proposal);
+        return proposal.Action switch
+        {
+            ActionIds.WaterCrops when config.EnableWaterCropsAction =>
+                ActionProposalDecision.Allow(
+                    $"Let {npc.displayName} water up to {Math.Min(requestedMaximum, config.MaxWaterTilesPerJob)} nearby crop tiles?",
+                    Math.Min(requestedMaximum, config.MaxWaterTilesPerJob)
+                ),
+            ActionIds.ClearWeeds when config.EnableClearWeedsAction =>
+                ActionProposalDecision.Allow(
+                    $"Let {npc.displayName} clear up to {Math.Min(requestedMaximum, config.MaxWeedsPerJob)} nearby weeds?",
+                    Math.Min(requestedMaximum, config.MaxWeedsPerJob)
+                ),
+            ActionIds.WaterCrops =>
+                ActionProposalDecision.Reject("Watering jobs are disabled."),
+            ActionIds.ClearWeeds =>
+                ActionProposalDecision.Reject("Weeding jobs are disabled."),
+            _ => ActionProposalDecision.Reject("That action is not on the local allowlist.")
+        };
+    }
+
+    public ActionJob Accept(
+        AgentActionProposal proposal,
+        NPC npc,
+        ActionProposalDecision decision)
+    {
+        bool playerIsOnFarm = Game1.player.currentLocation is Farm;
+        ActionJob job = new()
+        {
+            JobId = $"job_{Guid.NewGuid():N}"[..16],
+            ProposalId = proposal.ProposalId,
+            SaveId = Constants.SaveFolderName ?? "",
+            NpcName = npc.Name,
+            Action = proposal.Action,
+            State = ActionJobStates.Accepted,
+            MaxTargets = decision.MaxTargets,
+            CreatedDay = Game1.Date.TotalDays,
+            CreatedTime = Game1.timeOfDay,
+            AnchorX = playerIsOnFarm ? (int)Game1.player.Tile.X : -1,
+            AnchorY = playerIsOnFarm ? (int)Game1.player.Tile.Y : -1,
+            ReturnContext = new ActionReturnContext
+            {
+                LocationName = npc.currentLocation?.NameOrUniqueName ?? "",
+                TileX = (int)npc.Tile.X,
+                TileY = (int)npc.Tile.Y,
+                FacingDirection = npc.FacingDirection,
+                FollowSchedule = npc.followSchedule
+            }
+        };
+        data.Jobs.Add(job);
+        Save();
+        Trace(job, "accepted");
+        monitor.Log(
+            $"Accepted action job {job.JobId}: {job.NpcName}/{job.Action}/{job.MaxTargets}.",
+            LogLevel.Info
+        );
+        return job;
+    }
+
+    public void TraceProposalDecision(
+        AgentActionProposal proposal,
+        NPC npc,
+        ActionProposalDecision decision)
+    {
+        AppendTrace(new
+        {
+            timestamp = DateTimeOffset.UtcNow,
+            event_name = "proposal_validated",
+            proposal_id = proposal.ProposalId,
+            npc_name = npc.Name,
+            action = proposal.Action,
+            disposition = proposal.Disposition,
+            confidence = proposal.Confidence,
+            evidence = proposal.Evidence,
+            allowed = decision.Allowed,
+            message = decision.Message,
+            max_targets = decision.MaxTargets
+        });
+    }
+
+    public void TraceConfirmation(
+        AgentActionProposal proposal,
+        NPC npc,
+        bool confirmed)
+    {
+        AppendTrace(new
+        {
+            timestamp = DateTimeOffset.UtcNow,
+            event_name = confirmed ? "confirmation_accepted" : "confirmation_declined",
+            proposal_id = proposal.ProposalId,
+            npc_name = npc.Name,
+            action = proposal.Action,
+            confirmed
+        });
+    }
+
+    public void Update()
+    {
+        if (!Context.IsWorldReady || !Context.IsMainPlayer)
+            return;
+
+        foreach (ActionJob job in data.Jobs.Where(job => !ActionJobStates.IsTerminal(job.State)).ToList())
+            UpdateJob(job);
+    }
+
+    public string GetSummary()
+    {
+        List<ActionJob> active = data.Jobs
+            .Where(job => !ActionJobStates.IsTerminal(job.State))
+            .ToList();
+        if (active.Count == 0)
+            return "No active Valewake action jobs.";
+        return string.Join(
+            Environment.NewLine,
+            active.Select(job =>
+                $"{job.JobId}: {job.NpcName} {job.Action} [{job.State}] " +
+                $"{job.CompletedTargets}/{job.Targets.Count}"
+            )
+        );
+    }
+
+    public void CancelAll(string reason)
+    {
+        foreach (ActionJob job in data.Jobs.Where(job => !ActionJobStates.IsTerminal(job.State)))
+        {
+            job.State = ActionJobStates.Cancelled;
+            job.LastMessage = reason;
+            RestoreNpc(job);
+            Trace(job, "cancelled");
+        }
+        Save();
+    }
+
+    private void UpdateJob(ActionJob job)
+    {
+        if (Game1.eventUp || Game1.currentLocation?.currentEvent is not null || Game1.isFestival())
+        {
+            Fail(job, "An event or festival interrupted the job.", terminal: false);
+            return;
+        }
+        if (Game1.Date.TotalDays != job.CreatedDay || Game1.timeOfDay >= 2200)
+        {
+            Fail(job, "The work window ended before the job completed.", terminal: false);
+            return;
+        }
+
+        NPC? npc = Game1.getCharacterFromName(job.NpcName);
+        if (npc is null)
+        {
+            Fail(job, "NPC could not be found.", terminal: true);
+            return;
+        }
+
+        Farm farm = Game1.getFarm();
+        switch (job.State)
+        {
+            case ActionJobStates.Accepted:
+                ReserveNpc(npc);
+                if (npc.currentLocation is Farm)
+                {
+                    Transition(job, ActionJobStates.Preparing, "NPC is already on the farm.");
+                }
+                else if (!config.EnableCrossMapDispatch)
+                {
+                    Fail(job, "Cross-map dispatch is disabled.", terminal: false);
+                }
+                else
+                {
+                    job.RuntimeNextTick = Game1.ticks + 60;
+                    Transition(job, ActionJobStates.Dispatching, "Waiting for cross-map dispatch.");
+                }
+                break;
+
+            case ActionJobStates.Dispatching:
+                if (Game1.ticks < job.RuntimeNextTick)
+                    return;
+                if (ReferenceEquals(Game1.player.currentLocation, npc.currentLocation) &&
+                    Game1.ticks < job.RuntimeNextTick + 240)
+                {
+                    return;
+                }
+                ReserveNpc(npc);
+                Vector2 entry = FindFarmEntry(farm);
+                Game1.warpCharacter(npc, farm, entry);
+                Transition(job, ActionJobStates.Preparing, "NPC entered the farm at a legal entry tile.");
+                break;
+
+            case ActionJobStates.Preparing:
+                if (npc.currentLocation is not Farm)
+                {
+                    Fail(job, "NPC left the farm before work began.", terminal: false);
+                    return;
+                }
+                if (job.Targets.Count == 0)
+                    job.Targets = FindTargets(job, farm);
+                if (job.Targets.Count == 0)
+                {
+                    Complete(job, "No eligible targets were found.");
+                    return;
+                }
+                StartNextTarget(job, npc, farm);
+                break;
+
+            case ActionJobStates.Navigating:
+                UpdateNavigation(job, npc, farm);
+                break;
+
+            case ActionJobStates.Acting:
+                if (Game1.ticks < job.RuntimeNextTick)
+                    return;
+                ExecuteCurrentTarget(job, npc, farm);
+                break;
+        }
+    }
+
+    private void StartNextTarget(ActionJob job, NPC npc, Farm farm)
+    {
+        while (job.CurrentTargetIndex < job.Targets.Count)
+        {
+            ActionTile target = job.Targets[job.CurrentTargetIndex];
+            ActionTile? stand = FindStandTile(farm, target, npc.Tile);
+            if (stand is null)
+            {
+                job.FailedTargets++;
+                job.CurrentTargetIndex++;
+                continue;
+            }
+
+            job.RuntimeStandTile = stand;
+            job.RuntimePathStartedTick = Game1.ticks;
+            int facing = FacingToward(stand, target);
+            npc.controller = new PathFindController(
+                npc,
+                farm,
+                new Point(stand.X, stand.Y),
+                facing
+            );
+            Transition(
+                job,
+                ActionJobStates.Navigating,
+                $"Moving to target {job.CurrentTargetIndex + 1}/{job.Targets.Count}."
+            );
+            return;
+        }
+
+        Complete(
+            job,
+            $"Completed {job.CompletedTargets} targets; skipped {job.FailedTargets}."
+        );
+    }
+
+    private void UpdateNavigation(ActionJob job, NPC npc, Farm farm)
+    {
+        if (npc.currentLocation is not Farm || job.RuntimeStandTile is null)
+        {
+            Fail(job, "NPC or target left the farm during navigation.", terminal: false);
+            return;
+        }
+
+        ActionTile stand = job.RuntimeStandTile;
+        if ((int)npc.Tile.X == stand.X && (int)npc.Tile.Y == stand.Y)
+        {
+            npc.controller = null;
+            npc.Halt();
+            ActionTile target = job.Targets[job.CurrentTargetIndex];
+            npc.FacingDirection = FacingToward(stand, target);
+            Game1.playSound(job.Action == ActionIds.WaterCrops ? "wateringCan" : "cut");
+            job.RuntimeNextTick = Game1.ticks + 18;
+            Transition(job, ActionJobStates.Acting, "Playing the work animation.");
+            return;
+        }
+
+        if (Game1.ticks - job.RuntimePathStartedTick > config.ActionPathTimeoutTicks ||
+            npc.controller is null)
+        {
+            npc.controller = null;
+            npc.Halt();
+            job.FailedTargets++;
+            job.CurrentTargetIndex++;
+            job.State = ActionJobStates.Preparing;
+            job.LastMessage = "Path failed or timed out; skipping target.";
+            Save();
+            Trace(job, "target_path_failed");
+        }
+    }
+
+    private void ExecuteCurrentTarget(ActionJob job, NPC npc, Farm farm)
+    {
+        ActionTile target = job.Targets[job.CurrentTargetIndex];
+        Vector2 tile = new(target.X, target.Y);
+        bool success = job.Action switch
+        {
+            ActionIds.WaterCrops => WaterTile(farm, tile),
+            ActionIds.ClearWeeds => ClearWeed(farm, tile),
+            _ => false
+        };
+        if (success)
+            job.CompletedTargets++;
+        else
+            job.FailedTargets++;
+        job.CurrentTargetIndex++;
+        job.RuntimeStandTile = null;
+        job.State = ActionJobStates.Preparing;
+        job.LastMessage = success ? "Target completed and verified." : "Target was no longer eligible.";
+        Save();
+        Trace(job, success ? "target_completed" : "target_skipped");
+    }
+
+    private List<ActionTile> FindTargets(ActionJob job, Farm farm)
+    {
+        Vector2 anchor = job.AnchorX >= 0
+            ? new Vector2(job.AnchorX, job.AnchorY)
+            : FindFarmEntry(farm);
+        IEnumerable<Vector2> candidates = job.Action switch
+        {
+            ActionIds.WaterCrops => farm.terrainFeatures.Pairs
+                .Where(pair =>
+                    pair.Value is HoeDirt dirt &&
+                    dirt.crop is not null &&
+                    !dirt.crop.dead.Value &&
+                    dirt.state.Value != HoeDirt.watered
+                )
+                .Select(pair => pair.Key),
+            ActionIds.ClearWeeds => farm.Objects.Pairs
+                .Where(pair => IsStrictWeed(pair.Value))
+                .Select(pair => pair.Key),
+            _ => Enumerable.Empty<Vector2>()
+        };
+        return candidates
+            .Where(tile => TileDistance(tile, anchor) <= config.ActionTargetRadiusTiles || job.AnchorX < 0)
+            .OrderBy(tile => TileDistance(tile, anchor))
+            .Take(job.MaxTargets)
+            .Select(tile => new ActionTile((int)tile.X, (int)tile.Y))
+            .ToList();
+    }
+
+    private static bool WaterTile(Farm farm, Vector2 tile)
+    {
+        if (!farm.terrainFeatures.TryGetValue(tile, out TerrainFeature? feature) ||
+            feature is not HoeDirt dirt ||
+            dirt.crop is null ||
+            dirt.crop.dead.Value)
+        {
+            return false;
+        }
+        dirt.state.Value = HoeDirt.watered;
+        return dirt.state.Value == HoeDirt.watered;
+    }
+
+    private static bool ClearWeed(Farm farm, Vector2 tile)
+    {
+        if (!farm.Objects.TryGetValue(tile, out StardewValley.Object? obj) || !IsStrictWeed(obj))
+            return false;
+        Tool? scythe = ItemRegistry.Create("(W)47") as Tool;
+        bool destroyed = scythe is not null && obj.performToolAction(scythe);
+        if (destroyed)
+            farm.Objects.Remove(tile);
+        return destroyed && !farm.Objects.ContainsKey(tile);
+    }
+
+    private static bool IsStrictWeed(StardewValley.Object obj)
+    {
+        string name = obj.Name ?? "";
+        return WeedIds.Contains(obj.QualifiedItemId ?? "") ||
+               name.Equals("Weeds", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ActionTile? FindStandTile(GameLocation location, ActionTile target, Vector2 npcTile)
+    {
+        ActionTile[] candidates =
+        {
+            new(target.X, target.Y + 1),
+            new(target.X + 1, target.Y),
+            new(target.X - 1, target.Y),
+            new(target.X, target.Y - 1)
+        };
+        return candidates
+            .Where(tile => IsWalkable(location, tile))
+            .OrderBy(tile => TileDistance(new Vector2(tile.X, tile.Y), npcTile))
+            .FirstOrDefault();
+    }
+
+    private static bool IsWalkable(GameLocation location, ActionTile tile)
+    {
+        if (tile.X < 0 || tile.Y < 0 ||
+            tile.X >= location.Map.Layers[0].LayerWidth ||
+            tile.Y >= location.Map.Layers[0].LayerHeight)
+        {
+            return false;
+        }
+        Vector2 vector = new(tile.X, tile.Y);
+        if (!location.isTilePassable(new Location(tile.X, tile.Y), Game1.viewport))
+            return false;
+        if (location.Objects.TryGetValue(vector, out StardewValley.Object? obj) && !obj.isPassable())
+            return false;
+        if (location.terrainFeatures.TryGetValue(vector, out TerrainFeature? feature) && !feature.isPassable())
+            return false;
+        return true;
+    }
+
+    private static Vector2 FindFarmEntry(Farm farm)
+    {
+        if (Game1.player.currentLocation is Farm && IsWalkable(
+            farm,
+            new ActionTile((int)Game1.player.Tile.X, (int)Game1.player.Tile.Y)
+        ))
+        {
+            return Game1.player.Tile;
+        }
+
+        foreach (Warp warp in farm.warps.Where(warp =>
+            warp.TargetName.Equals("BusStop", StringComparison.OrdinalIgnoreCase)
+        ))
+        {
+            ActionTile candidate = new(warp.X, Math.Max(0, warp.Y - 1));
+            if (IsWalkable(farm, candidate))
+                return new Vector2(candidate.X, candidate.Y);
+        }
+
+        for (int y = 0; y < farm.Map.Layers[0].LayerHeight; y++)
+        {
+            for (int x = 0; x < farm.Map.Layers[0].LayerWidth; x++)
+            {
+                if (IsWalkable(farm, new ActionTile(x, y)))
+                    return new Vector2(x, y);
+            }
+        }
+        return new Vector2(64, 15);
+    }
+
+    private static int FacingToward(ActionTile from, ActionTile to)
+    {
+        int dx = to.X - from.X;
+        int dy = to.Y - from.Y;
+        if (Math.Abs(dx) > Math.Abs(dy))
+            return dx > 0 ? 1 : 3;
+        return dy > 0 ? 2 : 0;
+    }
+
+    private void ReserveNpc(NPC npc)
+    {
+        npc.controller = null;
+        npc.Halt();
+        npc.followSchedule = false;
+    }
+
+    private void RestoreNpc(ActionJob job)
+    {
+        NPC? npc = Game1.getCharacterFromName(job.NpcName);
+        if (npc is null)
+            return;
+        npc.controller = null;
+        npc.Halt();
+        GameLocation? returnLocation = Game1.getLocationFromName(job.ReturnContext.LocationName);
+        if (returnLocation is not null)
+        {
+            Game1.warpCharacter(
+                npc,
+                returnLocation,
+                new Vector2(job.ReturnContext.TileX, job.ReturnContext.TileY)
+            );
+        }
+        npc.FacingDirection = job.ReturnContext.FacingDirection;
+        npc.followSchedule = job.ReturnContext.FollowSchedule;
+        if (npc.followSchedule)
+            npc.checkSchedule(Game1.timeOfDay);
+    }
+
+    private void Complete(ActionJob job, string message)
+    {
+        job.State = ActionJobStates.Completed;
+        job.LastMessage = message;
+        RestoreNpc(job);
+        Save();
+        Trace(job, "completed");
+        Game1.addHUDMessage(new HUDMessage(
+            $"{job.NpcName} finished: {job.CompletedTargets} completed, {job.FailedTargets} skipped."
+        ));
+    }
+
+    private void Fail(ActionJob job, string message, bool terminal)
+    {
+        job.State = terminal ? ActionJobStates.FailedTerminal : ActionJobStates.FailedRecoverable;
+        job.LastMessage = message;
+        RestoreNpc(job);
+        Save();
+        Trace(job, "failed");
+        monitor.Log($"Action job {job.JobId} failed: {message}", LogLevel.Warn);
+        Game1.addHUDMessage(new HUDMessage($"{job.NpcName}'s job stopped: {message}"));
+    }
+
+    private void Transition(ActionJob job, string state, string message)
+    {
+        job.State = state;
+        job.LastMessage = message;
+        Save();
+        Trace(job, state);
+    }
+
+    private ActionJob? GetActiveJob(string npcName) =>
+        data.Jobs.LastOrDefault(job =>
+            job.NpcName.Equals(npcName, StringComparison.OrdinalIgnoreCase) &&
+            !ActionJobStates.IsTerminal(job.State)
+        );
+
+    private static int GetRequestedMaximum(AgentActionProposal proposal)
+    {
+        if (proposal.Parameters.TryGetValue("max_targets", out JsonElement value) &&
+            value.TryGetInt32(out int maximum))
+        {
+            return Math.Clamp(maximum, 1, 10);
+        }
+        return 10;
+    }
+
+    private void Save() => helper.Data.WriteSaveData(SaveDataKey, data);
+
+    private void Trace(ActionJob job, string eventName)
+    {
+        AppendTrace(new
+        {
+            timestamp = DateTimeOffset.UtcNow,
+            event_name = eventName,
+            job_id = job.JobId,
+            proposal_id = job.ProposalId,
+            save_id = job.SaveId,
+            npc_name = job.NpcName,
+            action = job.Action,
+            state = job.State,
+            completed_targets = job.CompletedTargets,
+            failed_targets = job.FailedTargets,
+            target_count = job.Targets.Count,
+            message = job.LastMessage
+        });
+    }
+
+    private void AppendTrace(object record)
+    {
+        try
+        {
+            string? directory = Path.GetDirectoryName(tracePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+                Directory.CreateDirectory(directory);
+            File.AppendAllText(
+                tracePath,
+                JsonSerializer.Serialize(record) + Environment.NewLine
+            );
+        }
+        catch (Exception ex)
+        {
+            monitor.Log($"Could not append Action Trace: {ex.Message}", LogLevel.Warn);
+        }
+    }
+
+    private static int TileDistance(Vector2 left, Vector2 right) =>
+        Math.Abs((int)left.X - (int)right.X) + Math.Abs((int)left.Y - (int)right.Y);
+}

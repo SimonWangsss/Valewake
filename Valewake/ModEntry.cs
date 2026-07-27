@@ -19,6 +19,7 @@ public sealed class ModEntry : Mod
     private AgentBackendClient? backendClient;
     private BackendProcessManager? backendProcessManager;
     private RelationshipManager? relationshipManager;
+    private ActionJobManager? actionJobManager;
     private readonly ConcurrentQueue<Action> mainThreadActions = new();
     private readonly List<AgentConversationMessage> conversationHistory = new();
     private NPC? activeChatNpc;
@@ -41,6 +42,7 @@ public sealed class ModEntry : Mod
         backendClient = new AgentBackendClient(Config.BackendUrl, Config.BackendTimeoutSeconds);
         backendProcessManager = new BackendProcessManager(Monitor, Config, helper.DirectoryPath);
         relationshipManager = new RelationshipManager(helper, Monitor, Config);
+        actionJobManager = new ActionJobManager(helper, Monitor, Config);
 
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
@@ -62,6 +64,30 @@ public sealed class ModEntry : Mod
             Config.ChatCommandName,
             $"Send a message to the nearest supported NPC. Usage: {Config.ChatCommandName} <message>",
             OnChatCommand
+        );
+
+        helper.ConsoleCommands.Add(
+            "agent_jobs",
+            "List active Valewake NPC jobs.",
+            (_, _) => Monitor.Log(
+                actionJobManager?.GetSummary() ?? "Action Job Manager is unavailable.",
+                LogLevel.Info
+            )
+        );
+
+        helper.ConsoleCommands.Add(
+            "agent_cancel_jobs",
+            "Cancel all active Valewake NPC jobs and restore their schedules.",
+            (_, _) =>
+            {
+                if (!Context.IsWorldReady)
+                {
+                    Monitor.Log("Load a save before cancelling jobs.", LogLevel.Warn);
+                    return;
+                }
+                actionJobManager?.CancelAll("Cancelled from the SMAPI console.");
+                Monitor.Log("Active Valewake jobs cancelled.", LogLevel.Info);
+            }
         );
 
         Monitor.Log(
@@ -93,6 +119,7 @@ public sealed class ModEntry : Mod
     private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
     {
         relationshipManager?.Load();
+        actionJobManager?.Load();
         Monitor.Log($"Save loaded for {Game1.player.Name} on {Game1.player.farmName.Value} Farm.", LogLevel.Info);
         LogSnapshot("Initial save snapshot");
     }
@@ -115,6 +142,8 @@ public sealed class ModEntry : Mod
                 Monitor.Log($"Failed to run queued agent UI action: {ex}", LogLevel.Error);
             }
         }
+
+        actionJobManager?.Update();
 
         if (pendingVanillaNpc is not null &&
             !pendingVanillaDialogueSeen &&
@@ -319,34 +348,67 @@ public sealed class ModEntry : Mod
                 LogLevel.Info
             );
 
-            if (response.ActionProposal is not null)
-            {
-                Monitor.Log(
-                    $"Action proposal recorded but not executed in this phase: {response.ActionProposal.Action}",
-                    LogLevel.Info
-                );
-            }
-
             mainThreadActions.Enqueue(() =>
             {
                 if (!Context.IsWorldReady)
                     return;
-                NPC? currentNpc = FindNpcInCurrentLocation(npc.Name) ?? npc;
+                NPC currentNpc = Game1.getCharacterFromName(npc.Name) ?? npc;
                 RelationshipApplicationResult? relationshipResult = relationshipManager?.Apply(
                     currentNpc,
                     response.RelationshipEffect
                 );
                 if (continueConversation && IsActiveChatNpc(currentNpc))
                     AddConversationMessage("assistant", response.Reply);
+
+                ActionProposalDecision? actionDecision = null;
+                if (response.ActionProposal is not null && actionJobManager is not null)
+                {
+                    actionDecision = actionJobManager.Evaluate(
+                        response.ActionProposal,
+                        currentNpc,
+                        playerInput,
+                        relationshipManager?.GetContext(currentNpc.Name) ?? new AgentRelationshipContext()
+                    );
+                    actionJobManager.TraceProposalDecision(
+                        response.ActionProposal,
+                        currentNpc,
+                        actionDecision
+                    );
+                    Monitor.Log(
+                        actionDecision.Allowed
+                            ? $"Action proposal validated: {response.ActionProposal.Action}"
+                            : $"Action proposal rejected: {actionDecision.Message}",
+                        actionDecision.Allowed ? LogLevel.Info : LogLevel.Warn
+                    );
+                }
+
+                Action? afterDialogue = continueConversation && IsActiveChatNpc(currentNpc)
+                    ? () => OpenChatInput(currentNpc)
+                    : null;
+                if (response.ActionProposal is not null && actionDecision?.Allowed == true)
+                {
+                    AgentActionProposal proposal = response.ActionProposal;
+                    ActionProposalDecision decision = actionDecision;
+                    afterDialogue = () => ShowActionConfirmation(
+                        currentNpc,
+                        proposal,
+                        decision,
+                        continueConversation
+                    );
+                }
                 ShowNpcDialogue(
                     currentNpc,
                     ApplyPortraitEmotion(response.Reply, response.Emotion),
-                    continueConversation && IsActiveChatNpc(currentNpc)
-                        ? () => OpenChatInput(currentNpc)
-                        : null
+                    afterDialogue
                 );
                 if (Config.ShowRelationshipFeedback && relationshipResult?.WasApplied == true)
                     Game1.addHUDMessage(new HUDMessage(relationshipResult.Feedback));
+                if (response.ActionProposal is not null &&
+                    actionDecision is not null &&
+                    !actionDecision.Allowed)
+                {
+                    Game1.addHUDMessage(new HUDMessage($"Job not started: {actionDecision.Message}"));
+                }
             });
         }
         catch (Exception ex)
@@ -364,6 +426,39 @@ public sealed class ModEntry : Mod
                 );
             });
         }
+    }
+
+    private void ShowActionConfirmation(
+        NPC npc,
+        AgentActionProposal proposal,
+        ActionProposalDecision decision,
+        bool continueConversation)
+    {
+        if (!Context.IsWorldReady || actionJobManager is null)
+            return;
+
+        Game1.currentLocation.createQuestionDialogue(
+            decision.ConfirmationQuestion,
+            Game1.currentLocation.createYesNoResponses(),
+            (_, answer) =>
+            {
+                bool confirmed = string.Equals(answer, "Yes", StringComparison.OrdinalIgnoreCase);
+                actionJobManager.TraceConfirmation(proposal, npc, confirmed);
+                if (confirmed)
+                {
+                    ActionJob job = actionJobManager.Accept(proposal, npc, decision);
+                    Game1.addHUDMessage(new HUDMessage(
+                        $"{npc.displayName} accepted the job ({job.MaxTargets} max)."
+                    ));
+                    EndChatSession();
+                    return;
+                }
+
+                if (continueConversation && IsActiveChatNpc(npc))
+                    OpenChatInput(npc);
+            },
+            npc
+        );
     }
 
     private void BeginChatSession(NPC npc, string vanillaOpeningLine)

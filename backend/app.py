@@ -37,8 +37,8 @@ def health() -> Dict[str, Any]:
     return {
         "ok": True,
         "project": "valewake",
-        "version": "0.8.0",
-        "dialogue_system": "v4-multi-npc",
+        "version": "0.9.0",
+        "dialogue_system": "v5-action-proposals",
         "memory_schema": 3,
         "lore_chunks": len(agent.rag.chunks),
         "curated_npc_profiles": agent.personas.curated_count,

@@ -1,6 +1,6 @@
 # Valewake
 
-This workspace contains a SMAPI-based, research-oriented AI NPC dialogue system and a future bounded-action agent foundation.
+This workspace contains a SMAPI-based, research-oriented AI NPC dialogue system and a bounded farm-help agent.
 
 ## References cloned locally
 
@@ -40,8 +40,10 @@ Current features:
 - Starts the bundled local backend automatically when SMAPI loads the mod.
 - Applies validated relationship effects to vanilla friendship plus Agent rapport/trust.
 - Renders validated NPC emotion through Stardew's native portrait commands.
-
-No autonomous actions are implemented yet. This is intentional: first verify SMAPI loading and state perception.
+- Converts watering and weeding requests into typed, locally validated proposals.
+- Requires native Yes/No confirmation before creating a persistent NPC job.
+- Supports local farm pathfinding, bounded per-tile execution, cross-map dispatch,
+  schedule restoration, failure recovery, host authority, and Action Trace.
 
 ## Independent backend
 
@@ -62,7 +64,7 @@ Current backend features:
 - NPC-scoped retrieval that prevents one resident's private Lore from leaking into another resident's prompt
 - social-context-aware Dialogue Policy
 - deterministic offline evaluation and real-game Trace scoring
-- dialogue-only capability boundary: action proposals are traced but never executed
+- typed watering/weeding proposals with deterministic normalization and evidence grounding
 - same-language validation with a bounded Chinese correction retry
 
 ## Build
@@ -95,6 +97,18 @@ Stand near any social NPC and either right-click them for continuous dialogue or
 ```text
 agent_chat What should I do today?
 ```
+
+For a bounded job, ask an eligible adult NPC with at least two hearts:
+
+```text
+Can you help me water the nearby crops?
+Can you clear the weeds on my farm?
+```
+
+The NPC may accept, refuse, or negotiate in character. An accepted proposal
+still requires local validation and a Yes/No confirmation. Use `agent_jobs` to
+inspect the active queue or `agent_cancel_jobs` to cancel and restore schedules.
+See `docs/action_agent_v1_test_plan.md` for the complete manual test matrix.
 
 Expected behavior:
 
