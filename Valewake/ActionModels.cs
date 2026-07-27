@@ -59,7 +59,19 @@ public sealed class ActionJob
     public long RuntimePathStartedTick { get; set; }
 
     [JsonIgnore]
+    public long RuntimeDispatchDeadlineTick { get; set; }
+
+    [JsonIgnore]
+    public long RuntimeFarmArrivalTick { get; set; }
+
+    [JsonIgnore]
     public ActionTile? RuntimeStandTile { get; set; }
+
+    [JsonIgnore]
+    public List<ActionTile> RuntimeStandCandidates { get; set; } = new();
+
+    [JsonIgnore]
+    public int RuntimeStandCandidateIndex { get; set; }
 }
 
 public sealed class ActionTile

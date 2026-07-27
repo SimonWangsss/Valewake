@@ -29,6 +29,8 @@
   "EnableWaterCropsAction": true,
   "EnableClearWeedsAction": true,
   "EnableCrossMapDispatch": true,
+  "CrossMapDispatchWaitSeconds": 60,
+  "CrossMapFarmLeadSeconds": 8,
   "MinimumActionHearts": 2,
   "MinimumActionTrust": 0,
   "MinimumActionConfidence": 0.65,

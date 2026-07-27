@@ -35,6 +35,8 @@ public sealed class ModConfig
     public bool EnableWaterCropsAction { get; set; } = true;
     public bool EnableClearWeedsAction { get; set; } = true;
     public bool EnableCrossMapDispatch { get; set; } = true;
+    public int CrossMapDispatchWaitSeconds { get; set; } = 60;
+    public int CrossMapFarmLeadSeconds { get; set; } = 8;
     public int MinimumActionHearts { get; set; } = 2;
     public int MinimumActionTrust { get; set; } = 0;
     public double MinimumActionConfidence { get; set; } = 0.65;

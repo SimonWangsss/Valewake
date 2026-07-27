@@ -85,6 +85,24 @@ class StardewAgent:
         )
         raw_result = self.llm.chat(messages)
         generation = self._parse_generation(raw_result, player_input)
+        parse_retried = False
+        if not generation["_parse_valid"]:
+            parse_retried = True
+            retry_messages = messages + [
+                {"role": "assistant", "content": raw_result},
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous response was incomplete or invalid JSON. Return one compact, "
+                        "complete JSON object using the requested schema. Keep reply to 1-2 short "
+                        "sentences. Do not use markdown or add text outside the JSON object."
+                    ),
+                },
+            ]
+            generation = self._parse_generation(
+                self.llm.chat(retry_messages, temperature=0.1),
+                player_input,
+            )
         if self._needs_language_retry(player_input, generation["reply"]):
             retry_messages = messages + [
                 {"role": "assistant", "content": raw_result},
@@ -101,6 +119,7 @@ class StardewAgent:
                 self.llm.chat(retry_messages, temperature=0.15),
                 player_input,
             )
+        parse_valid = generation.pop("_parse_valid", False)
         generation["action_proposal"] = normalize_action_proposal(
             generation.get("action_proposal"),
             player_input,
@@ -148,6 +167,8 @@ class StardewAgent:
             "relationship_effect": relationship_effect,
             "memory_written": saved_memories,
             "action_proposal": action_proposal,
+            "generation_parse_valid": parse_valid,
+            "generation_parse_retried": parse_retried,
             "episode_id": episode_id,
         })
         return {
@@ -411,11 +432,12 @@ class StardewAgent:
             parsed = json.loads(text)
         except (json.JSONDecodeError, TypeError):
             return {
-                "reply": text or localized_fallback(player_input),
-                "emotion": "neutral",
+                "reply": self._extract_partial_json_string(text, "reply") or localized_fallback(player_input),
+                "emotion": self._extract_partial_json_string(text, "emotion") or "neutral",
                 "relationship_effect": self._neutral_effect("The model did not return a valid relationship assessment."),
                 "memory_candidates": [],
                 "action_proposal": None,
+                "_parse_valid": False,
             }
 
         if not isinstance(parsed, dict):
@@ -431,7 +453,19 @@ class StardewAgent:
             "relationship_effect": effect,
             "memory_candidates": candidates if isinstance(candidates, list) else [],
             "action_proposal": parsed.get("action_proposal") if isinstance(parsed.get("action_proposal"), dict) else None,
+            "_parse_valid": True,
         }
+
+    @staticmethod
+    def _extract_partial_json_string(text: str, key: str) -> str:
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*', text)
+        if not match:
+            return ""
+        try:
+            value, _ = json.JSONDecoder().raw_decode(text[match.end():])
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        return value.strip() if isinstance(value, str) else ""
 
     def _normalize_relationship_effect(self, value: Any, player_input: str) -> Dict[str, Any]:
         if not isinstance(value, dict):

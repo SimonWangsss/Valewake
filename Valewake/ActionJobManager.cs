@@ -262,22 +262,40 @@ public sealed class ActionJobManager
                 else
                 {
                     job.RuntimeNextTick = Game1.ticks + 60;
-                    Transition(job, ActionJobStates.Dispatching, "Waiting for cross-map dispatch.");
+                    job.RuntimeDispatchDeadlineTick =
+                        Game1.ticks + Math.Max(10, config.CrossMapDispatchWaitSeconds) * 60L;
+                    Transition(job, ActionJobStates.Dispatching, "Waiting for the player to enter the farm.");
                 }
                 break;
 
             case ActionJobStates.Dispatching:
                 if (Game1.ticks < job.RuntimeNextTick)
                     return;
-                if (ReferenceEquals(Game1.player.currentLocation, npc.currentLocation) &&
-                    Game1.ticks < job.RuntimeNextTick + 240)
+                if (Game1.player.currentLocation is not Farm)
+                {
+                    if (Game1.ticks >= job.RuntimeDispatchDeadlineTick)
+                        Fail(job, "The player did not reach the farm before dispatch timed out.", terminal: false);
+                    return;
+                }
+                if (job.RuntimeFarmArrivalTick == 0)
+                {
+                    job.RuntimeFarmArrivalTick = Game1.ticks;
+                    Game1.addHUDMessage(new HUDMessage(
+                        $"Head toward the work area; {npc.displayName} will join you shortly."
+                    ));
+                    return;
+                }
+                if (Game1.ticks - job.RuntimeFarmArrivalTick <
+                    Math.Max(0, config.CrossMapFarmLeadSeconds) * 60L)
                 {
                     return;
                 }
                 ReserveNpc(npc);
-                Vector2 entry = FindFarmEntry(farm);
+                job.AnchorX = (int)Game1.player.Tile.X;
+                job.AnchorY = (int)Game1.player.Tile.Y;
+                Vector2 entry = FindDispatchTileNearPlayer(farm);
                 Game1.warpCharacter(npc, farm, entry);
-                Transition(job, ActionJobStates.Preparing, "NPC entered the farm at a legal entry tile.");
+                Transition(job, ActionJobStates.Preparing, "NPC joined the player on the farm.");
                 break;
 
             case ActionJobStates.Preparing:
@@ -313,23 +331,16 @@ public sealed class ActionJobManager
         while (job.CurrentTargetIndex < job.Targets.Count)
         {
             ActionTile target = job.Targets[job.CurrentTargetIndex];
-            ActionTile? stand = FindStandTile(farm, target, npc.Tile);
-            if (stand is null)
+            job.RuntimeStandCandidates = FindStandTiles(farm, target, npc.Tile);
+            job.RuntimeStandCandidateIndex = 0;
+            if (job.RuntimeStandCandidates.Count == 0)
             {
                 job.FailedTargets++;
                 job.CurrentTargetIndex++;
                 continue;
             }
 
-            job.RuntimeStandTile = stand;
-            job.RuntimePathStartedTick = Game1.ticks;
-            int facing = FacingToward(stand, target);
-            npc.controller = new PathFindController(
-                npc,
-                farm,
-                new Point(stand.X, stand.Y),
-                facing
-            );
+            StartPathToCurrentStand(job, npc, farm);
             Transition(
                 job,
                 ActionJobStates.Navigating,
@@ -370,6 +381,15 @@ public sealed class ActionJobManager
         {
             npc.controller = null;
             npc.Halt();
+            job.RuntimeStandCandidateIndex++;
+            if (job.RuntimeStandCandidateIndex < job.RuntimeStandCandidates.Count)
+            {
+                StartPathToCurrentStand(job, npc, farm);
+                job.LastMessage = "Path failed; trying another adjacent work tile.";
+                Save();
+                Trace(job, "target_path_retry");
+                return;
+            }
             job.FailedTargets++;
             job.CurrentTargetIndex++;
             job.State = ActionJobStates.Preparing;
@@ -377,6 +397,20 @@ public sealed class ActionJobManager
             Save();
             Trace(job, "target_path_failed");
         }
+    }
+
+    private static void StartPathToCurrentStand(ActionJob job, NPC npc, Farm farm)
+    {
+        ActionTile stand = job.RuntimeStandCandidates[job.RuntimeStandCandidateIndex];
+        ActionTile target = job.Targets[job.CurrentTargetIndex];
+        job.RuntimeStandTile = stand;
+        job.RuntimePathStartedTick = Game1.ticks;
+        npc.controller = new PathFindController(
+            npc,
+            farm,
+            new Point(stand.X, stand.Y),
+            FacingToward(stand, target)
+        );
     }
 
     private void ExecuteCurrentTarget(ActionJob job, NPC npc, Farm farm)
@@ -395,6 +429,7 @@ public sealed class ActionJobManager
             job.FailedTargets++;
         job.CurrentTargetIndex++;
         job.RuntimeStandTile = null;
+        job.RuntimeStandCandidates.Clear();
         job.State = ActionJobStates.Preparing;
         job.LastMessage = success ? "Target completed and verified." : "Target was no longer eligible.";
         Save();
@@ -460,7 +495,7 @@ public sealed class ActionJobManager
                name.Equals("Weeds", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static ActionTile? FindStandTile(GameLocation location, ActionTile target, Vector2 npcTile)
+    private static List<ActionTile> FindStandTiles(GameLocation location, ActionTile target, Vector2 npcTile)
     {
         ActionTile[] candidates =
         {
@@ -472,7 +507,7 @@ public sealed class ActionJobManager
         return candidates
             .Where(tile => IsWalkable(location, tile))
             .OrderBy(tile => TileDistance(new Vector2(tile.X, tile.Y), npcTile))
-            .FirstOrDefault();
+            .ToList();
     }
 
     private static bool IsWalkable(GameLocation location, ActionTile tile)
@@ -521,6 +556,30 @@ public sealed class ActionJobManager
             }
         }
         return new Vector2(64, 15);
+    }
+
+    private static Vector2 FindDispatchTileNearPlayer(Farm farm)
+    {
+        ActionTile playerTile = new((int)Game1.player.Tile.X, (int)Game1.player.Tile.Y);
+        for (int radius = 1; radius <= 4; radius++)
+        {
+            for (int y = playerTile.Y - radius; y <= playerTile.Y + radius; y++)
+            {
+                for (int x = playerTile.X - radius; x <= playerTile.X + radius; x++)
+                {
+                    if (Math.Abs(x - playerTile.X) + Math.Abs(y - playerTile.Y) != radius)
+                        continue;
+                    ActionTile candidate = new(x, y);
+                    if (!IsWalkable(farm, candidate))
+                        continue;
+                    Vector2 tile = new(x, y);
+                    if (farm.characters.Any(character => character.Tile == tile))
+                        continue;
+                    return tile;
+                }
+            }
+        }
+        return FindFarmEntry(farm);
     }
 
     private static int FacingToward(ActionTile from, ActionTile to)
@@ -612,6 +671,11 @@ public sealed class ActionJobManager
 
     private void Trace(ActionJob job, string eventName)
     {
+        NPC? npc = Game1.getCharacterFromName(job.NpcName);
+        ActionTile? currentTarget =
+            job.CurrentTargetIndex >= 0 && job.CurrentTargetIndex < job.Targets.Count
+                ? job.Targets[job.CurrentTargetIndex]
+                : null;
         AppendTrace(new
         {
             timestamp = DateTimeOffset.UtcNow,
@@ -625,6 +689,9 @@ public sealed class ActionJobManager
             completed_targets = job.CompletedTargets,
             failed_targets = job.FailedTargets,
             target_count = job.Targets.Count,
+            current_target = currentTarget,
+            npc_location = npc?.currentLocation?.NameOrUniqueName,
+            npc_tile = npc is null ? null : new { x = (int)npc.Tile.X, y = (int)npc.Tile.Y },
             message = job.LastMessage
         });
     }

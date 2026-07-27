@@ -155,5 +155,32 @@ class PolicyV3Tests(unittest.TestCase):
         self.assertEqual("neutral", emotion)
 
 
+class StructuredGenerationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.agent = object.__new__(StardewAgent)
+
+    def test_truncated_json_salvages_only_reply_text(self) -> None:
+        raw = (
+            '{"reply":"可以啊，带我去你的农场看看。","emotion":"happy",'
+            '"relationship_effect":{'
+        )
+        result = self.agent._parse_generation(raw, "你能帮我浇水吗？")
+        self.assertFalse(result["_parse_valid"])
+        self.assertEqual("可以啊，带我去你的农场看看。", result["reply"])
+        self.assertNotIn('"reply"', result["reply"])
+        self.assertIsNone(result["action_proposal"])
+
+    def test_complete_json_is_marked_valid(self) -> None:
+        raw = (
+            '{"reply":"好。","emotion":"neutral",'
+            '"relationship_effect":{"valence":"neutral","intensity":0,'
+            '"confidence":0.8,"reason":"ordinary request","evidence":""},'
+            '"memory_candidates":[],"action_proposal":null}'
+        )
+        result = self.agent._parse_generation(raw, "你好")
+        self.assertTrue(result["_parse_valid"])
+        self.assertEqual("好。", result["reply"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,8 +30,10 @@ class LLMClient:
             "model": self.config.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": 520,
+            "max_tokens": 900,
         }
+        if "api.deepseek.com" in self.config.api_base.lower():
+            payload["response_format"] = {"type": "json_object"}
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"

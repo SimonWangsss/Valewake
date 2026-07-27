@@ -126,6 +126,19 @@ class ActionLoreConsistencyTests(unittest.TestCase):
         self.assertIn("Season alone does not prove", chunk["text"])
         self.assertNotIn("cannot water", chunk["text"])
 
+    def test_capability_lore_matches_bounded_executor(self) -> None:
+        lore_path = (
+            Path(__file__).resolve().parents[1]
+            / "data"
+            / "rag"
+            / "stardew"
+            / "agent_capabilities.jsonl"
+        )
+        text = lore_path.read_text(encoding="utf-8")
+        self.assertIn("confirmed watering", text)
+        self.assertIn("strict weed-clearing", text)
+        self.assertNotIn("cannot yet move the NPC", text)
+
 
 if __name__ == "__main__":
     unittest.main()
