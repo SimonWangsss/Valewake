@@ -1,0 +1,39 @@
+# Secrets and machine-local configuration
+.env
+.env.local
+*.secrets.json
+
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python packaging output
+backend/build/
+backend/dist/
+*.spec
+
+# .NET and IDE output
+bin/
+obj/
+.vs/
+.vscode/
+*.user
+*.suo
+*.log
+
+# Runtime memory, traces, and generated evaluation reports
+backend/data/memory/
+backend/data/traces/
+backend/data/test_runs/*
+!backend/data/test_runs/golden_eval_20260727T091514Z.json
+
+# Bundled runtime copied into the mod; rebuild it from backend source.
+StardewAgentFramework/Backend/
+
+# Third-party research checkouts are documented but not vendored.
+references/

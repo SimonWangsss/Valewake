@@ -1,0 +1,10 @@
+{
+  "Name": "Stardew Agent Framework",
+  "Author": "Simon",
+  "Version": "0.6.0",
+  "Description": "An expressive AI NPC dialogue system with social policy, layered memory, hybrid lore retrieval, relationship authority, and evaluation traces.",
+  "UniqueID": "Simon.StardewAgentFramework",
+  "EntryDll": "StardewAgentFramework.dll",
+  "MinimumApiVersion": "4.0.0",
+  "UpdateKeys": []
+}
