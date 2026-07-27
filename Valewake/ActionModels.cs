@@ -76,6 +76,9 @@ public sealed class ActionJob
 
     [JsonIgnore]
     public ActionTile? RuntimeReturnTile { get; set; }
+
+    [JsonIgnore]
+    public ActionTile? RuntimeDispatchTile { get; set; }
 }
 
 public sealed class ActionTile

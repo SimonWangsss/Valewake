@@ -296,6 +296,7 @@ public sealed class ActionJobManager
                 job.AnchorX = (int)Game1.player.Tile.X;
                 job.AnchorY = (int)Game1.player.Tile.Y;
                 Vector2 entry = FindFarmBoundaryEntry(farm);
+                job.RuntimeDispatchTile = new ActionTile((int)entry.X, (int)entry.Y);
                 Game1.warpCharacter(npc, farm, entry);
                 Game1.addHUDMessage(new HUDMessage(
                     $"{npc.displayName} arrived at the farm and is walking to the work area."
@@ -403,6 +404,20 @@ public sealed class ActionJobManager
                 return;
             }
             job.FailedTargets++;
+            if (job.CompletedTargets == 0 &&
+                job.FailedTargets == 1 &&
+                job.RuntimeDispatchTile is not null &&
+                (int)npc.Tile.X == job.RuntimeDispatchTile.X &&
+                (int)npc.Tile.Y == job.RuntimeDispatchTile.Y)
+            {
+                Fail(
+                    job,
+                    $"The farm entrance at ({job.RuntimeDispatchTile.X}, {job.RuntimeDispatchTile.Y}) " +
+                    "was not connected to the selected work area.",
+                    terminal: false
+                );
+                return;
+            }
             job.CurrentTargetIndex++;
             job.State = ActionJobStates.Preparing;
             job.LastMessage = "Path failed or timed out; skipping target.";
@@ -547,9 +562,11 @@ public sealed class ActionJobManager
             warp.TargetName.Equals("BusStop", StringComparison.OrdinalIgnoreCase)
         ))
         {
-            ActionTile candidate = new(warp.X, Math.Max(0, warp.Y - 1));
-            if (IsWalkable(farm, candidate))
-                return new Vector2(candidate.X, candidate.Y);
+            foreach (ActionTile candidate in InwardWarpTiles(farm, warp))
+            {
+                if (IsWalkable(farm, candidate))
+                    return new Vector2(candidate.X, candidate.Y);
+            }
         }
 
         for (int y = 0; y < farm.Map.Layers[0].LayerHeight; y++)
@@ -561,6 +578,26 @@ public sealed class ActionJobManager
             }
         }
         return new Vector2(64, 15);
+    }
+
+    private static IEnumerable<ActionTile> InwardWarpTiles(Farm farm, Warp warp)
+    {
+        int width = farm.Map.Layers[0].LayerWidth;
+        int height = farm.Map.Layers[0].LayerHeight;
+        int[] offsets = { 2, 3, 4, 5, 6, 7, 8, 1 };
+        foreach (int offset in offsets)
+        {
+            if (warp.Y <= 1)
+                yield return new ActionTile(warp.X, warp.Y + offset);
+            else if (warp.Y >= height - 2)
+                yield return new ActionTile(warp.X, warp.Y - offset);
+            else if (warp.X <= 1)
+                yield return new ActionTile(warp.X + offset, warp.Y);
+            else if (warp.X >= width - 2)
+                yield return new ActionTile(warp.X - offset, warp.Y);
+            else
+                yield return new ActionTile(warp.X, warp.Y);
+        }
     }
 
     private void BeginReturn(ActionJob job, NPC npc, Farm farm, string workSummary)
