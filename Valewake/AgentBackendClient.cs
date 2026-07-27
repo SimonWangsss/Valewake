@@ -16,10 +16,15 @@ public sealed class AgentBackendClient : IDisposable
 
     private readonly HttpClient httpClient;
     private readonly Uri endpoint;
+    private readonly Uri memoryCommitEndpoint;
+    private readonly Uri memoryRollbackEndpoint;
 
     public AgentBackendClient(string backendUrl, int timeoutSeconds)
     {
         endpoint = new Uri(backendUrl);
+        Uri serviceRoot = new(endpoint, "/");
+        memoryCommitEndpoint = new Uri(serviceRoot, "memory/commit");
+        memoryRollbackEndpoint = new Uri(serviceRoot, "memory/rollback");
         httpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(Math.Max(5, timeoutSeconds))
@@ -45,6 +50,36 @@ public sealed class AgentBackendClient : IDisposable
         }
 
         return parsed;
+    }
+
+    public Task CommitMemoryAsync(string sessionPrefix, CancellationToken cancellationToken = default) =>
+        SendMemoryOperationAsync(memoryCommitEndpoint, sessionPrefix, cancellationToken);
+
+    public Task RollbackMemoryAsync(string sessionPrefix, CancellationToken cancellationToken = default) =>
+        SendMemoryOperationAsync(memoryRollbackEndpoint, sessionPrefix, cancellationToken);
+
+    private async Task SendMemoryOperationAsync(
+        Uri operationEndpoint,
+        string sessionPrefix,
+        CancellationToken cancellationToken)
+    {
+        string json = JsonSerializer.Serialize(
+            new { session_prefix = sessionPrefix },
+            JsonOptions
+        );
+        using StringContent content = new(json, Encoding.UTF8, "application/json");
+        using HttpResponseMessage response = await httpClient.PostAsync(
+            operationEndpoint,
+            content,
+            cancellationToken
+        );
+        string responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new InvalidOperationException(
+                $"Backend memory operation returned {(int)response.StatusCode}: {responseText}"
+            );
+        }
     }
 
     public void Dispose()

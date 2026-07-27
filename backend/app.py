@@ -27,6 +27,10 @@ class ChatResponse(BaseModel):
     debug_prompt: Optional[str] = None
 
 
+class MemorySessionRequest(BaseModel):
+    session_prefix: str
+
+
 app = FastAPI(title="Valewake Backend")
 settings = Settings.from_env()
 agent = StardewAgent(settings)
@@ -37,7 +41,7 @@ def health() -> Dict[str, Any]:
     return {
         "ok": True,
         "project": "valewake",
-        "version": "0.9.0",
+        "version": "0.9.1",
         "dialogue_system": "v5-action-proposals",
         "memory_schema": 3,
         "lore_chunks": len(agent.rag.chunks),
@@ -59,3 +63,15 @@ def chat(request: ChatRequest) -> ChatResponse:
         debug=request.debug,
     )
     return ChatResponse(**result)
+
+
+@app.post("/memory/commit")
+def commit_memory(request: MemorySessionRequest) -> Dict[str, Any]:
+    agent.memory.commit_session(request.session_prefix)
+    return {"ok": True, "operation": "commit", "session_prefix": request.session_prefix}
+
+
+@app.post("/memory/rollback")
+def rollback_memory(request: MemorySessionRequest) -> Dict[str, Any]:
+    agent.memory.rollback_session(request.session_prefix)
+    return {"ok": True, "operation": "rollback", "session_prefix": request.session_prefix}

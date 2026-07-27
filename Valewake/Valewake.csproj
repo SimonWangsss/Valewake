@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>Valewake</AssemblyName>
     <RootNamespace>Valewake</RootNamespace>
-    <Version>0.9.0</Version>
+    <Version>0.9.1</Version>
     <ModFolderName>Valewake</ModFolderName>
     <GamePath>E:\SteamLibrary\steamapps\common\Stardew Valley</GamePath>
   </PropertyGroup>

@@ -17,6 +17,7 @@ public static class ActionJobStates
     public const string Preparing = "preparing";
     public const string Navigating = "navigating";
     public const string Acting = "acting";
+    public const string Returning = "returning";
     public const string Completed = "completed";
     public const string Cancelled = "cancelled";
     public const string FailedRecoverable = "failed_recoverable";
@@ -72,6 +73,9 @@ public sealed class ActionJob
 
     [JsonIgnore]
     public int RuntimeStandCandidateIndex { get; set; }
+
+    [JsonIgnore]
+    public ActionTile? RuntimeReturnTile { get; set; }
 }
 
 public sealed class ActionTile

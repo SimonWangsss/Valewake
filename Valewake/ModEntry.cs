@@ -22,6 +22,7 @@ public sealed class ModEntry : Mod
     private ActionJobManager? actionJobManager;
     private readonly ConcurrentQueue<Action> mainThreadActions = new();
     private readonly List<AgentConversationMessage> conversationHistory = new();
+    private Task memorySessionReady = Task.CompletedTask;
     private NPC? activeChatNpc;
     private NPC? pendingVanillaNpc;
     private bool pendingVanillaDialogueSeen;
@@ -46,6 +47,7 @@ public sealed class ModEntry : Mod
 
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
+        helper.Events.GameLoop.Saved += OnSaved;
         helper.Events.GameLoop.DayStarted += OnDayStarted;
         helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
         helper.Events.GameLoop.OneSecondUpdateTicked += OnOneSecondUpdateTicked;
@@ -53,6 +55,7 @@ public sealed class ModEntry : Mod
         AppDomain.CurrentDomain.ProcessExit += OnGameExiting;
         helper.Events.Input.ButtonPressed += OnButtonPressed;
         helper.Events.Display.MenuChanged += OnMenuChanged;
+        helper.Events.Display.RenderedWorld += OnRenderedWorld;
 
         helper.ConsoleCommands.Add(
             Config.StateCommandName,
@@ -118,10 +121,16 @@ public sealed class ModEntry : Mod
 
     private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
     {
+        memorySessionReady = RollbackCurrentSaveMemoryAsync();
         relationshipManager?.Load();
         actionJobManager?.Load();
         Monitor.Log($"Save loaded for {Game1.player.Name} on {Game1.player.farmName.Value} Farm.", LogLevel.Info);
         LogSnapshot("Initial save snapshot");
+    }
+
+    private void OnSaved(object? sender, SavedEventArgs e)
+    {
+        memorySessionReady = CommitCurrentSaveMemoryAsync();
     }
 
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
@@ -169,8 +178,17 @@ public sealed class ModEntry : Mod
             LogSnapshot("Periodic snapshot", LogLevel.Trace);
     }
 
+    private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
+    {
+        if (Context.IsWorldReady)
+            actionJobManager?.Draw(e.SpriteBatch);
+    }
+
     private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
     {
+        string saveFolder = Constants.SaveFolderName ?? "";
+        if (!string.IsNullOrWhiteSpace(saveFolder))
+            _ = RollbackMemoryAsync($"{saveFolder}:");
         EndChatSession();
         ClearPendingVanillaDialogue();
         Monitor.Log("Returned to title screen.", LogLevel.Trace);
@@ -297,6 +315,7 @@ public sealed class ModEntry : Mod
             });
             return;
         }
+        await memorySessionReady;
 
         NpcPerceptionSnapshot npcPerception = NpcPerceptionSnapshot.FromGame(npc);
         var gameState = new
@@ -425,6 +444,56 @@ public sealed class ModEntry : Mod
                         : null
                 );
             });
+        }
+    }
+
+    private async Task CommitCurrentSaveMemoryAsync()
+    {
+        string saveFolder = Constants.SaveFolderName ?? "";
+        if (!string.IsNullOrWhiteSpace(saveFolder))
+            await CommitMemoryAsync($"{saveFolder}:");
+    }
+
+    private async Task RollbackCurrentSaveMemoryAsync()
+    {
+        string saveFolder = Constants.SaveFolderName ?? "";
+        if (!string.IsNullOrWhiteSpace(saveFolder))
+            await RollbackMemoryAsync($"{saveFolder}:");
+    }
+
+    private async Task CommitMemoryAsync(string sessionPrefix)
+    {
+        try
+        {
+            if (backendClient is null ||
+                (backendProcessManager is not null && !await backendProcessManager.EnsureReadyAsync()))
+            {
+                return;
+            }
+            await backendClient.CommitMemoryAsync(sessionPrefix);
+            Monitor.Log($"Committed AI memory for {sessionPrefix}", LogLevel.Trace);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Could not commit AI memory: {ex.Message}", LogLevel.Warn);
+        }
+    }
+
+    private async Task RollbackMemoryAsync(string sessionPrefix)
+    {
+        try
+        {
+            if (backendClient is null ||
+                (backendProcessManager is not null && !await backendProcessManager.EnsureReadyAsync()))
+            {
+                return;
+            }
+            await backendClient.RollbackMemoryAsync(sessionPrefix);
+            Monitor.Log($"Rolled AI memory back to the last game save for {sessionPrefix}", LogLevel.Trace);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Could not roll back AI memory: {ex.Message}", LogLevel.Warn);
         }
     }
 

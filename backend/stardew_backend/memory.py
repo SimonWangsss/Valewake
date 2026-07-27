@@ -1,5 +1,6 @@
 import json
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
@@ -12,21 +13,24 @@ from stardew_backend.retrieval import score_text
 class MemoryStore:
     def __init__(self, path: Path, max_episodes_per_session: int = 80):
         self.path = path
+        self.checkpoint_path = path.with_name(f"{path.stem}.committed{path.suffix}")
         self.max_episodes_per_session = max(20, max_episodes_per_session)
         self._lock = RLock()
-        self.data = self._load()
+        self.data = self._load_path(self.path)
+        if not self.checkpoint_path.exists():
+            self._write(self.checkpoint_path, self.data)
 
-    def _load(self) -> Dict[str, Any]:
+    def _load_path(self, path: Path) -> Dict[str, Any]:
         empty = {
             "schema_version": 3,
             "memories": [],
             "episodes": [],
             "consolidation": {},
         }
-        if not self.path.exists():
+        if not path.exists():
             return empty
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return empty
         if not isinstance(data, dict):
@@ -68,13 +72,57 @@ class MemoryStore:
 
     def save(self) -> None:
         with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = self.path.with_suffix(self.path.suffix + ".tmp")
-            temporary_path.write_text(
-                json.dumps(self.data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            self._write(self.path, self.data)
+
+    @staticmethod
+    def _write(path: Path, data: Dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = path.with_suffix(path.suffix + ".tmp")
+        temporary_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_path.replace(path)
+
+    def commit_session(self, session_prefix: str) -> None:
+        with self._lock:
+            committed = self._load_path(self.checkpoint_path)
+            self._replace_session_data(committed, self.data, session_prefix)
+            self._write(self.checkpoint_path, committed)
+            self._write(self.path, self.data)
+
+    def rollback_session(self, session_prefix: str) -> None:
+        with self._lock:
+            committed = self._load_path(self.checkpoint_path)
+            self._replace_session_data(self.data, committed, session_prefix)
+            self._write(self.path, self.data)
+
+    @staticmethod
+    def _replace_session_data(
+        destination: Dict[str, Any],
+        source: Dict[str, Any],
+        session_prefix: str,
+    ) -> None:
+        def matches(item: Dict[str, Any]) -> bool:
+            return str(item.get("session_id", "")).startswith(session_prefix)
+
+        for collection in ("memories", "episodes"):
+            retained = [
+                item for item in destination[collection]
+                if not matches(item)
+            ]
+            retained.extend(
+                deepcopy(item) for item in source[collection] if matches(item)
             )
-            temporary_path.replace(self.path)
+            destination[collection] = retained
+
+        destination_consolidation = destination["consolidation"]
+        for key in list(destination_consolidation):
+            if str(key).startswith(session_prefix):
+                del destination_consolidation[key]
+        for key, value in source["consolidation"].items():
+            if str(key).startswith(session_prefix):
+                destination_consolidation[key] = deepcopy(value)
 
     def add(
         self,
@@ -262,7 +310,12 @@ class MemoryStore:
     ) -> dict[str, Any]:
         episodes = self.recent_episodes(session_id, 30)
         similarities = [score_text(player_input, str(item.get("player_input", ""))) for item in episodes]
-        repeat_count = sum(1 for score in similarities if score >= 0.72)
+        same_day_similarities = [
+            score
+            for score, item in zip(similarities, episodes)
+            if game_day is None or item.get("game_day") == game_day
+        ]
+        repeat_count = sum(1 for score in same_day_similarities if score >= 0.72)
         maximum_similarity = max(similarities, default=0.0)
         previous_days = [item.get("game_day") for item in episodes if isinstance(item.get("game_day"), int)]
         days_since = None

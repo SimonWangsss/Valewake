@@ -4,8 +4,10 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Microsoft.Xna.Framework;
+using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewValley;
+using StardewValley.ItemTypeDefinitions;
 using StardewValley.Pathfinding;
 using StardewValley.TerrainFeatures;
 using StardewValley.Tools;
@@ -293,9 +295,12 @@ public sealed class ActionJobManager
                 ReserveNpc(npc);
                 job.AnchorX = (int)Game1.player.Tile.X;
                 job.AnchorY = (int)Game1.player.Tile.Y;
-                Vector2 entry = FindDispatchTileNearPlayer(farm);
+                Vector2 entry = FindFarmBoundaryEntry(farm);
                 Game1.warpCharacter(npc, farm, entry);
-                Transition(job, ActionJobStates.Preparing, "NPC joined the player on the farm.");
+                Game1.addHUDMessage(new HUDMessage(
+                    $"{npc.displayName} arrived at the farm and is walking to the work area."
+                ));
+                Transition(job, ActionJobStates.Preparing, "NPC entered through the farm boundary.");
                 break;
 
             case ActionJobStates.Preparing:
@@ -308,7 +313,7 @@ public sealed class ActionJobManager
                     job.Targets = FindTargets(job, farm);
                 if (job.Targets.Count == 0)
                 {
-                    Complete(job, "No eligible targets were found.");
+                    BeginReturn(job, npc, farm, "No eligible targets were found.");
                     return;
                 }
                 StartNextTarget(job, npc, farm);
@@ -322,6 +327,10 @@ public sealed class ActionJobManager
                 if (Game1.ticks < job.RuntimeNextTick)
                     return;
                 ExecuteCurrentTarget(job, npc, farm);
+                break;
+
+            case ActionJobStates.Returning:
+                UpdateReturn(job, npc, farm);
                 break;
         }
     }
@@ -349,8 +358,10 @@ public sealed class ActionJobManager
             return;
         }
 
-        Complete(
+        BeginReturn(
             job,
+            npc,
+            farm,
             $"Completed {job.CompletedTargets} targets; skipped {job.FailedTargets}."
         );
     }
@@ -370,8 +381,9 @@ public sealed class ActionJobManager
             npc.Halt();
             ActionTile target = job.Targets[job.CurrentTargetIndex];
             npc.FacingDirection = FacingToward(stand, target);
+            StartWorkAnimation(npc);
             Game1.playSound(job.Action == ActionIds.WaterCrops ? "wateringCan" : "cut");
-            job.RuntimeNextTick = Game1.ticks + 18;
+            job.RuntimeNextTick = Game1.ticks + 36;
             Transition(job, ActionJobStates.Acting, "Playing the work animation.");
             return;
         }
@@ -423,6 +435,7 @@ public sealed class ActionJobManager
             ActionIds.ClearWeeds => ClearWeed(farm, tile),
             _ => false
         };
+        npc.Sprite.ClearAnimation();
         if (success)
             job.CompletedTargets++;
         else
@@ -440,7 +453,7 @@ public sealed class ActionJobManager
     {
         Vector2 anchor = job.AnchorX >= 0
             ? new Vector2(job.AnchorX, job.AnchorY)
-            : FindFarmEntry(farm);
+            : FindFarmBoundaryEntry(farm);
         IEnumerable<Vector2> candidates = job.Action switch
         {
             ActionIds.WaterCrops => farm.terrainFeatures.Pairs
@@ -528,16 +541,8 @@ public sealed class ActionJobManager
         return true;
     }
 
-    private static Vector2 FindFarmEntry(Farm farm)
+    private static Vector2 FindFarmBoundaryEntry(Farm farm)
     {
-        if (Game1.player.currentLocation is Farm && IsWalkable(
-            farm,
-            new ActionTile((int)Game1.player.Tile.X, (int)Game1.player.Tile.Y)
-        ))
-        {
-            return Game1.player.Tile;
-        }
-
         foreach (Warp warp in farm.warps.Where(warp =>
             warp.TargetName.Equals("BusStop", StringComparison.OrdinalIgnoreCase)
         ))
@@ -558,28 +563,75 @@ public sealed class ActionJobManager
         return new Vector2(64, 15);
     }
 
-    private static Vector2 FindDispatchTileNearPlayer(Farm farm)
+    private void BeginReturn(ActionJob job, NPC npc, Farm farm, string workSummary)
     {
-        ActionTile playerTile = new((int)Game1.player.Tile.X, (int)Game1.player.Tile.Y);
-        for (int radius = 1; radius <= 4; radius++)
+        npc.Sprite.ClearAnimation();
+        Vector2 destination;
+        if (job.ReturnContext.LocationName.Equals(
+            farm.NameOrUniqueName,
+            StringComparison.OrdinalIgnoreCase))
         {
-            for (int y = playerTile.Y - radius; y <= playerTile.Y + radius; y++)
-            {
-                for (int x = playerTile.X - radius; x <= playerTile.X + radius; x++)
-                {
-                    if (Math.Abs(x - playerTile.X) + Math.Abs(y - playerTile.Y) != radius)
-                        continue;
-                    ActionTile candidate = new(x, y);
-                    if (!IsWalkable(farm, candidate))
-                        continue;
-                    Vector2 tile = new(x, y);
-                    if (farm.characters.Any(character => character.Tile == tile))
-                        continue;
-                    return tile;
-                }
-            }
+            destination = new Vector2(job.ReturnContext.TileX, job.ReturnContext.TileY);
         }
-        return FindFarmEntry(farm);
+        else
+        {
+            destination = FindFarmBoundaryEntry(farm);
+        }
+
+        job.RuntimeReturnTile = new ActionTile((int)destination.X, (int)destination.Y);
+        job.RuntimePathStartedTick = Game1.ticks;
+        npc.controller = new PathFindController(
+            npc,
+            farm,
+            new Point(job.RuntimeReturnTile.X, job.RuntimeReturnTile.Y),
+            2
+        );
+        Game1.addHUDMessage(new HUDMessage(
+            $"{npc.displayName} finished the work and is leaving the farm."
+        ));
+        Transition(job, ActionJobStates.Returning, workSummary);
+    }
+
+    private void UpdateReturn(ActionJob job, NPC npc, Farm farm)
+    {
+        if (npc.currentLocation is not Farm || job.RuntimeReturnTile is null)
+        {
+            Complete(job, $"{job.LastMessage} Return route was interrupted.");
+            return;
+        }
+
+        ActionTile destination = job.RuntimeReturnTile;
+        bool arrived =
+            (int)npc.Tile.X == destination.X &&
+            (int)npc.Tile.Y == destination.Y;
+        bool timedOut =
+            Game1.ticks - job.RuntimePathStartedTick >
+            Math.Max(1800, config.ActionPathTimeoutTicks);
+        if (arrived || timedOut || npc.controller is null)
+        {
+            string suffix = arrived
+                ? " NPC reached the farm exit."
+                : " NPC schedule was restored after the return path ended.";
+            Complete(job, job.LastMessage + suffix);
+        }
+    }
+
+    private static void StartWorkAnimation(NPC npc)
+    {
+        int baseFrame = npc.FacingDirection switch
+        {
+            1 => 4,
+            0 => 8,
+            3 => 12,
+            _ => 0
+        };
+        npc.Sprite.setCurrentAnimation(new List<FarmerSprite.AnimationFrame>
+        {
+            new(baseFrame + 1, 130),
+            new(baseFrame, 90),
+            new(baseFrame + 3, 130),
+            new(baseFrame, 90)
+        });
     }
 
     private static int FacingToward(ActionTile from, ActionTile to)
@@ -618,6 +670,50 @@ public sealed class ActionJobManager
         npc.followSchedule = job.ReturnContext.FollowSchedule;
         if (npc.followSchedule)
             npc.checkSchedule(Game1.timeOfDay);
+    }
+
+    public void Draw(SpriteBatch spriteBatch)
+    {
+        ActionJob? job = data.Jobs.LastOrDefault(job =>
+            job.State == ActionJobStates.Acting &&
+            job.Action == ActionIds.WaterCrops
+        );
+        if (job is null)
+            return;
+        NPC? npc = Game1.getCharacterFromName(job.NpcName);
+        if (npc is null || npc.currentLocation != Game1.currentLocation)
+            return;
+
+        ParsedItemData wateringCan = ItemRegistry.GetDataOrErrorItem("(T)WateringCan");
+        Texture2D texture = wateringCan.GetTexture();
+        Microsoft.Xna.Framework.Rectangle source = wateringCan.GetSourceRect();
+        Vector2 worldPosition = npc.Position + (npc.FacingDirection switch
+        {
+            0 => new Vector2(24, -10),
+            1 => new Vector2(48, 24),
+            3 => new Vector2(-8, 24),
+            _ => new Vector2(30, 48)
+        });
+        float rotation = npc.FacingDirection switch
+        {
+            1 => 0.75f,
+            3 => -0.75f,
+            _ => 0f
+        };
+        SpriteEffects effects = npc.FacingDirection == 3
+            ? SpriteEffects.FlipHorizontally
+            : SpriteEffects.None;
+        spriteBatch.Draw(
+            texture,
+            Game1.GlobalToLocal(Game1.viewport, worldPosition),
+            source,
+            Color.White,
+            rotation,
+            new Vector2(source.Width / 2f, source.Height / 2f),
+            3f,
+            effects,
+            Math.Min(1f, (npc.StandingPixel.Y + 64) / 10000f)
+        );
     }
 
     private void Complete(ActionJob job, string message)

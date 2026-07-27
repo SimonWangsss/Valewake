@@ -45,6 +45,63 @@ class RetrievalV3Tests(unittest.TestCase):
 
 
 class MemoryV3Tests(unittest.TestCase):
+    def test_unsaved_episode_rolls_back_to_last_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            memory = MemoryStore(Path(temporary) / "memory.json")
+            session = "save-a:Haley"
+            memory.record_episode(
+                session, "First saved request", "Sure.", "happy", 10, {}
+            )
+            memory.commit_session("save-a:")
+            memory.record_episode(
+                session, "Unsaved request", "Again?", "neutral", 10, {}
+            )
+
+            memory = MemoryStore(Path(temporary) / "memory.json")
+            memory.rollback_session("save-a:")
+
+            episodes = memory.recent_episodes(session, 10)
+            self.assertEqual(["First saved request"], [
+                item["player_input"] for item in episodes
+            ])
+
+    def test_memory_checkpoint_is_isolated_by_save_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            memory = MemoryStore(Path(temporary) / "memory.json")
+            memory.record_episode("save-a:Haley", "A", "A", "neutral", 10, {})
+            memory.record_episode("save-b:Haley", "B", "B", "neutral", 10, {})
+            memory.commit_session("save-a:")
+            memory.rollback_session("save-b:")
+
+            self.assertEqual(1, len(memory.recent_episodes("save-a:Haley")))
+            self.assertEqual(0, len(memory.recent_episodes("save-b:Haley")))
+
+    def test_repetition_pressure_resets_on_next_game_day(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            memory = MemoryStore(Path(temporary) / "memory.json")
+            session = "save-a:Haley"
+            for _ in range(2):
+                memory.record_episode(
+                    session,
+                    "Can you water the crops?",
+                    "Sure.",
+                    "neutral",
+                    10,
+                    {},
+                )
+
+            same_day = memory.social_context(
+                "Can you water the crops?", session, 10, {}
+            )
+            next_day = memory.social_context(
+                "Can you water the crops?", session, 11, {}
+            )
+            self.assertEqual(2, same_day["semantic_repeat_count"])
+            self.assertTrue(same_day["boundary_pressure"])
+            self.assertEqual(0, next_day["semantic_repeat_count"])
+            self.assertFalse(next_day["boundary_pressure"])
+            self.assertEqual(1, next_day["days_since_last_interaction"])
+
     def test_chinese_preference_is_extracted(self) -> None:
         extracted = extract_memories("我最喜欢在雨天钓鱼。")
         self.assertEqual(1, len(extracted))
