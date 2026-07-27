@@ -37,8 +37,10 @@ def health() -> Dict[str, Any]:
     return {
         "ok": True,
         "project": "stardew_agent_mod",
-        "dialogue_system": "v2",
-        "memory_schema": 2,
+        "version": "0.7.0",
+        "dialogue_system": "v3",
+        "memory_schema": 3,
+        "lore_chunks": len(agent.rag.chunks),
         "llm_backend": settings.llm_backend,
         "rag_dir": str(settings.rag_dir),
         "memory_path": str(settings.memory_path),

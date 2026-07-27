@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <AssemblyName>StardewAgentFramework</AssemblyName>
     <RootNamespace>StardewAgentFramework</RootNamespace>
-    <Version>0.6.0</Version>
+    <Version>0.7.0</Version>
     <ModFolderName>StardewAgentFramework</ModFolderName>
     <GamePath>E:\SteamLibrary\steamapps\common\Stardew Valley</GamePath>
   </PropertyGroup>

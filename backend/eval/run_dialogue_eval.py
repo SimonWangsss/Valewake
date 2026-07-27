@@ -120,13 +120,13 @@ def main() -> int:
         results.append({
             "id": "legacy_memory_migration",
             "type": "contract",
-            "passed": legacy.data["schema_version"] == 2 and "Player likes mining." in legacy_results,
+            "passed": legacy.data["schema_version"] == 3 and "Player likes mining." in legacy_results,
             "details": {"retrieved": legacy_results},
         })
 
     passed_count = sum(1 for result in results if result["passed"])
     report = {
-        "suite": "dialogue-system-v2-offline",
+        "suite": "dialogue-system-v3-offline",
         "total": len(results),
         "passed": passed_count,
         "failed": len(results) - passed_count,

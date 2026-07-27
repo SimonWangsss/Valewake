@@ -12,11 +12,15 @@ class DialoguePolicy:
         risks: list[str] = []
         if any(marker in lowered for marker in [
             "system prompt", "ignore previous", "ignore all", "api key", "developer message",
-            "系统提示", "忽略之前", "忽略所有", "api密钥", "提示词",
+            "hidden instruction", "reveal your rules", "exit character",
+            "系统提示", "忽略之前", "忽略以上", "忽略所有", "无视之前",
+            "api密钥", "提示词", "开发者命令", "开发者消息", "隐藏规则",
+            "隐藏指令", "退出角色", "逐字输出", "角色设定",
         ]):
             risks.append("prompt_injection")
         if any(marker in lowered for marker in [
-            "deepseek", "chatgpt", "language model", "backend", "mod source", "大模型", "后端", "模组代码",
+            "deepseek", "chatgpt", "language model", "backend", "mod source",
+            "source code", "大模型", "语言模型", "后端", "模组代码", "源代码",
         ]):
             risks.append("out_of_world")
         if social_context.get("intimacy_mismatch"):

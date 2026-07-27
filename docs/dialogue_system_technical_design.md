@@ -1,6 +1,24 @@
 # Stardew Agent Framework 对话系统技术设计与实现总结
 
-> 文档版本：0.6.0  
+## 0.7.0 架构更新
+
+0.7.0 在保留原有 Perception、Policy、Trace 和游戏关系 authority 的基础上，
+完成了以下对话内核升级：
+
+- Lore 从 22 条综合 chunk 扩展为 54 条原子 chunk，并用 `parent_id` 连接精确事实和基础角色设定。
+- RAG 从 BM25/关键词/标签升级为中英主题路由、BM25、字符 n-gram TF-IDF 稀疏向量和 parent context。
+- Memory 升级为 schema v3，分为 conversation、episodic、semantic retrieval 和 durable profile 四层。
+- 语义记忆增加 `canonical_key`、`polarity`、`status` 和 `supersedes`，支持冲突偏好替换。
+- 问句、NPC 事实和“玩家询问了……”一类会话元信息不再写入长期记忆。
+- 中文输入若被模型错误地用英文回答，只进行一次低温纠正重试。
+- Trace 中的 Lore 记录现在包含 chunk ID、得分、主题标签、来源和 parent ID。
+
+冻结的 132 条黄金集上，Runtime Recall@5 从 `0.388` 提升到 `0.938`，
+MRR 从 `0.224` 提升到 `0.801`；完整 DeepSeek 生成回归从 `27/48`
+提升到 `37/48`，中文一致率达到 `48/48`。详见
+`docs/baseline_0.7.0_2026-07-27.md`。
+
+> 文档版本：0.7.0
 > 更新日期：2026-07-20  
 > 项目目录：`E:\Codex\ai-npc-3d-persona-memory\projects\StardewAgentFramework`  
 > 当前目标：在不破坏《星露谷物语》原有进度系统的前提下，为 NPC 提供可感知、可记忆、受边界约束且可追踪评估的连续 LLM 对话。  

@@ -5,7 +5,12 @@ from typing import Any, Dict, List
 from stardew_backend.config import Settings
 from stardew_backend.dialogue_policy import DialoguePolicy, game_day_from_state, relationship_from_state
 from stardew_backend.llm_client import LLMClient, LLMConfig
-from stardew_backend.memory import MemoryStore, extract_memories
+from stardew_backend.memory import (
+    MemoryStore,
+    extract_memories,
+    is_durable_player_evidence,
+    is_unanchored_question,
+)
 from stardew_backend.retrieval import RagStore
 from stardew_backend.trace import TraceStore
 
@@ -43,10 +48,16 @@ class StardewAgent:
         saved_memories = self._save_memories(player_input, session_id, game_day)
         tags = self._rag_tags(game_state)
         tags.extend(dialogue_policy["risk_types"])
-        retrieved_lore = self.rag.search(player_input, self.settings.top_k_rag, tags=tags)
+        lore_matches = self.rag.search_details(
+            player_input,
+            self.settings.top_k_rag,
+            tags=tags,
+        )
+        retrieved_lore = [item["formatted"] for item in lore_matches]
         retrieved_memory = self.memory.search(
             player_input, session_id, self.settings.top_k_memory, game_day=game_day
         )
+        durable_profile = self.memory.durable_profile(session_id, limit=6)
         retrieved_episodes = self.memory.recent_episodes(session_id, limit=6)
         conversation_history = self._normalize_conversation_history(conversation_history or [])
         messages = self._build_messages(
@@ -54,6 +65,7 @@ class StardewAgent:
             game_state,
             retrieved_lore,
             retrieved_memory,
+            durable_profile,
             retrieved_episodes,
             conversation_history,
             social_context,
@@ -61,8 +73,28 @@ class StardewAgent:
         )
         raw_result = self.llm.chat(messages)
         generation = self._parse_generation(raw_result, player_input)
-        reply = self._post_check(generation["reply"])
-        emotion = generation["emotion"]
+        if self._needs_language_retry(player_input, generation["reply"]):
+            retry_messages = messages + [
+                {"role": "assistant", "content": raw_result},
+                {
+                    "role": "user",
+                    "content": (
+                        "The dialogue language is wrong. Return the same JSON schema again, "
+                        "but write reply, reason, and memory text in Simplified Chinese. "
+                        "Keep all facts and boundaries unchanged."
+                    ),
+                },
+            ]
+            generation = self._parse_generation(
+                self.llm.chat(retry_messages, temperature=0.15),
+                player_input,
+            )
+        reply = self._post_check(generation["reply"], player_input)
+        emotion = self._constrain_emotion(
+            generation["emotion"],
+            player_input,
+            dialogue_policy,
+        )
         saved_memories.extend(
             self._save_memory_candidates(
                 player_input, session_id, generation["memory_candidates"], game_day
@@ -88,8 +120,9 @@ class StardewAgent:
             "social_context": social_context,
             "dialogue_policy": dialogue_policy,
             "perception": game_state.get("npc_perception") or game_state.get("snapshot") or {},
-            "retrieved_lore": retrieved_lore,
+            "retrieved_lore": lore_matches,
             "retrieved_memory": retrieved_memory,
+            "durable_profile": durable_profile,
             "retrieved_episodes": retrieved_episodes,
             "reply": reply,
             "emotion": emotion,
@@ -134,8 +167,12 @@ class StardewAgent:
         game_day: int | None,
     ) -> List[str]:
         saved: list[str] = []
-        allowed_kinds = {"profile", "preference", "promise", "opinion"}
+        allowed_kinds = {
+            "profile", "preference", "promise", "opinion", "goal", "boundary"
+        }
         lowered_input = player_input.lower()
+        if is_unanchored_question(player_input):
+            return saved
         for candidate in candidates[:3]:
             text = str(candidate.get("text", "")).strip()[:180]
             evidence = str(candidate.get("evidence", "")).strip()
@@ -147,6 +184,18 @@ class StardewAgent:
             if subject != "player":
                 continue
             if not evidence or evidence.lower() not in lowered_input:
+                continue
+            if not is_durable_player_evidence(evidence):
+                continue
+            lowered_candidate = text.lower()
+            if any(marker in lowered_candidate for marker in (
+                "player asked", "player mentioned", "player wondered",
+                "玩家询问", "玩家问了", "玩家提到了", "玩家想知道",
+            )):
+                continue
+            if not any(marker in lowered_candidate for marker in (
+                "player", "farmer", "玩家", "农夫",
+            )):
                 continue
             importance = max(1, min(3, int(candidate.get("importance", 1) or 1)))
             if self.memory.add(
@@ -196,6 +245,7 @@ class StardewAgent:
         game_state: Dict[str, Any],
         retrieved_lore: list[str],
         retrieved_memory: list[str],
+        durable_profile: list[str],
         retrieved_episodes: list[dict[str, Any]],
         conversation_history: list[dict[str, str]],
         social_context: dict[str, Any],
@@ -206,6 +256,10 @@ class StardewAgent:
         state_text = json.dumps(game_state, ensure_ascii=False, indent=2)[:5000]
         lore_text = "\n".join(f"- {item}" for item in retrieved_lore) or "- No retrieved lore."
         memory_text = "\n".join(f"- {item}" for item in retrieved_memory) or "- No relevant memory."
+        profile_text = (
+            "\n".join(f"- {item}" for item in durable_profile)
+            or "- No durable player profile yet."
+        )
         history_text = json.dumps(conversation_history, ensure_ascii=False, indent=2)[:4000]
         episode_text = json.dumps(retrieved_episodes, ensure_ascii=False, indent=2)[:4000]
         social_text = json.dumps(social_context, ensure_ascii=False, indent=2)
@@ -215,6 +269,7 @@ class StardewAgent:
             f"You are {npc_name} from Stardew Valley speaking with the farmer. "
             "Stay in character and do not mention being an AI, model, API, system prompt, backend, or mod. "
             "Reply in the same language as the player, using 1 to 4 short sentences. "
+            "If the player writes Chinese, every user-visible string in the JSON must use Simplified Chinese. "
             "Only use facts present in NPC-visible perception, retrieved lore, memory, or ordinary character knowledge. "
             "Do not act like an omniscient farm assistant. "
             "Do not claim to perform actions. The current prototype can only talk and advise. "
@@ -230,6 +285,8 @@ class StardewAgent:
             f"{lore_text}\n\n"
             "Relevant player memory:\n"
             f"{memory_text}\n\n"
+            "High-importance durable player profile:\n"
+            f"{profile_text}\n\n"
             "Recent durable interaction episodes from earlier conversations:\n"
             f"{episode_text}\n\n"
             "Recent conversation history (oldest to newest):\n"
@@ -257,7 +314,7 @@ class StardewAgent:
             "    \"evidence\": \"short direct quote from the player's input, or empty when neutral\"\n"
             "  },\n"
             "  \"memory_candidates\": [\n"
-            "    {\"subject\": \"player\", \"kind\": \"profile|preference|promise|opinion\", \"text\": \"third-person durable fact about the player\", \"importance\": 1, \"confidence\": 0.0, \"evidence\": \"exact quote from player input\"}\n"
+            "    {\"subject\": \"player\", \"kind\": \"profile|preference|promise|opinion|goal|boundary\", \"text\": \"third-person durable fact about the player\", \"importance\": 1, \"confidence\": 0.0, \"evidence\": \"exact quote from player input\"}\n"
             "  ],\n"
             "  \"action_proposal\": null\n"
             "}\n\n"
@@ -300,7 +357,7 @@ class StardewAgent:
             parsed = json.loads(text)
         except (json.JSONDecodeError, TypeError):
             return {
-                "reply": text or "I'm listening.",
+                "reply": text or localized_fallback(player_input),
                 "emotion": "neutral",
                 "relationship_effect": self._neutral_effect("The model did not return a valid relationship assessment."),
                 "memory_candidates": [],
@@ -315,7 +372,7 @@ class StardewAgent:
         if emotion not in {"neutral", "happy", "sad", "angry", "affectionate"}:
             emotion = "neutral"
         return {
-            "reply": str(parsed.get("reply") or "I'm listening."),
+            "reply": str(parsed.get("reply") or localized_fallback(player_input)),
             "emotion": emotion,
             "relationship_effect": effect,
             "memory_candidates": candidates if isinstance(candidates, list) else [],
@@ -356,10 +413,49 @@ class StardewAgent:
             "evidence": "",
         }
 
-    def _post_check(self, reply: str) -> str:
+    @staticmethod
+    def _needs_language_retry(player_input: str, reply: str) -> bool:
+        return contains_chinese(player_input) and not contains_chinese(reply)
+
+    @staticmethod
+    def _constrain_emotion(
+        emotion: str,
+        player_input: str,
+        dialogue_policy: dict[str, Any],
+    ) -> str:
+        lowered = player_input.lower()
+        danger_markers = (
+            "danger", "dangerous", "monster", "completely safe",
+            "危险", "怪物", "完全安全", "闭着眼",
+        )
+        if (
+            any(marker in lowered for marker in danger_markers)
+            and emotion not in {"neutral", "angry"}
+        ):
+            return "neutral"
+        if (
+            dialogue_policy.get("response_stance") == "refuse_in_character"
+            and emotion == "affectionate"
+        ):
+            return "neutral"
+        return emotion
+
+    def _post_check(self, reply: str, player_input: str) -> str:
         text = (reply or "").strip()
         forbidden = ["as an ai", "i am an ai", "language model", "system prompt", "backend", "api key"]
         if any(item in text.lower() for item in forbidden):
-            return "Nice try. Let's keep this about the valley, okay?"
+            return (
+                "少来这套。我们还是聊聊山谷里的事吧。"
+                if contains_chinese(player_input)
+                else "Nice try. Let's keep this about the valley, okay?"
+            )
         lines = [line.strip() for line in text.replace("\r", "").split("\n") if line.strip()]
-        return "\n".join(lines[:4]) if lines else "I'm listening."
+        return "\n".join(lines[:4]) if lines else localized_fallback(player_input)
+
+
+def contains_chinese(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text or ""))
+
+
+def localized_fallback(player_input: str) -> str:
+    return "我在听。你想聊什么？" if contains_chinese(player_input) else "I'm listening."

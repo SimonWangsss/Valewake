@@ -55,11 +55,13 @@ Current backend features:
 
 - `/chat`
 - mock or OpenAI-compatible LLM client
-- layered semantic and episodic player memory
-- hybrid JSONL RAG for Abigail persona, relationships, Stardew lore, and boundaries
+- four-layer player memory: conversation, episodic, semantic retrieval, and durable profile
+- hybrid JSONL RAG with topic routing, BM25, character n-gram TF-IDF vectors, and parent context
+- 54 atomic Lore chunks for Abigail persona, relationships, Stardew lore, and boundaries
 - social-context-aware Dialogue Policy
 - deterministic offline evaluation and real-game Trace scoring
 - dialogue-only capability boundary: action proposals are traced but never executed
+- same-language validation with a bounded Chinese correction retry
 
 ## Build
 

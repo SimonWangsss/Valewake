@@ -17,7 +17,12 @@ class MemoryStore:
         self.data = self._load()
 
     def _load(self) -> Dict[str, Any]:
-        empty = {"schema_version": 2, "memories": [], "episodes": []}
+        empty = {
+            "schema_version": 3,
+            "memories": [],
+            "episodes": [],
+            "consolidation": {},
+        }
         if not self.path.exists():
             return empty
         try:
@@ -39,7 +44,27 @@ class MemoryStore:
             item.setdefault("updated_at", item.get("created_at", utc_now()))
             item.setdefault("last_accessed_at", "")
             item.setdefault("game_day", None)
-        return {"schema_version": 2, "memories": memories, "episodes": episodes}
+            item.setdefault(
+                "canonical_key",
+                canonical_memory_key(
+                    str(item.get("text", "")),
+                    str(item.get("kind", "preference")),
+                ),
+            )
+            item.setdefault("polarity", memory_polarity(str(item.get("text", ""))))
+            item.setdefault("status", "active")
+            item.setdefault("supersedes", "")
+        consolidation = (
+            data.get("consolidation")
+            if isinstance(data.get("consolidation"), dict)
+            else {}
+        )
+        return {
+            "schema_version": 3,
+            "memories": memories,
+            "episodes": episodes,
+            "consolidation": consolidation,
+        }
 
     def save(self) -> None:
         with self._lock:
@@ -61,15 +86,21 @@ class MemoryStore:
         confidence: float = 1.0,
         game_day: int | None = None,
         source: str = "rule",
+        canonical_key: str = "",
     ) -> bool:
         text = clean_text(text)[:180]
         if not text:
             return False
         normalized = normalize_text(text)
+        canonical_key = canonical_key or canonical_memory_key(text, kind)
+        polarity = memory_polarity(text)
         now = utc_now()
+        superseded_id = ""
         with self._lock:
             for item in self.data["memories"]:
                 if item.get("session_id") != session_id:
+                    continue
+                if item.get("status", "active") != "active":
                     continue
                 if normalize_text(str(item.get("text", ""))) != normalized:
                     continue
@@ -83,6 +114,44 @@ class MemoryStore:
                     item["game_day"] = game_day
                 self.save()
                 return True
+
+            if canonical_key:
+                for item in self.data["memories"]:
+                    if item.get("session_id") != session_id:
+                        continue
+                    if item.get("status", "active") != "active":
+                        continue
+                    if item.get("canonical_key") != canonical_key:
+                        continue
+                    prior_polarity = str(item.get("polarity", "unknown"))
+                    if (
+                        polarity != "unknown"
+                        and prior_polarity != "unknown"
+                        and polarity != prior_polarity
+                    ):
+                        item["status"] = "superseded"
+                        item["updated_at"] = now
+                        superseded_id = str(item.get("id", ""))
+                        continue
+                    if score_text(text, str(item.get("text", ""))) >= 0.78:
+                        item["reinforcement_count"] = int(
+                            item.get("reinforcement_count", 1)
+                        ) + 1
+                        item["importance"] = max(
+                            int(item.get("importance", 1)),
+                            max(1, min(3, importance)),
+                        )
+                        item["confidence"] = max(
+                            float(item.get("confidence", 0.0)),
+                            max(0.0, min(1.0, confidence)),
+                        )
+                        item["updated_at"] = now
+                        if evidence:
+                            item["evidence"] = clean_text(evidence)[:160]
+                        if game_day is not None:
+                            item["game_day"] = game_day
+                        self.save()
+                        return True
 
             self.data["memories"].append({
                 "id": uuid4().hex,
@@ -99,6 +168,10 @@ class MemoryStore:
                 "updated_at": now,
                 "last_accessed_at": "",
                 "game_day": game_day,
+                "canonical_key": canonical_key,
+                "polarity": polarity,
+                "status": "active",
+                "supersedes": superseded_id,
             })
             self.save()
         return True
@@ -109,14 +182,32 @@ class MemoryStore:
             for item in self.data["memories"]:
                 if item.get("session_id") != session_id:
                     continue
+                if item.get("status", "active") != "active":
+                    continue
                 text = str(item.get("text", ""))
-                relevance = score_text(query, text)
+                searchable = " ".join([
+                    text,
+                    str(item.get("evidence", "")),
+                    str(item.get("kind", "")),
+                    str(item.get("canonical_key", "")),
+                ])
+                relevance = score_text(query, searchable)
                 if relevance <= 0:
                     continue
                 importance = max(1, min(3, int(item.get("importance", 1) or 1)))
                 reinforcement = min(5, int(item.get("reinforcement_count", 1) or 1))
                 recency = self._recency_score(game_day, item.get("game_day"))
-                score = relevance * 0.72 + importance * 0.06 + reinforcement * 0.025 + recency * 0.08
+                kind_score = memory_kind_query_score(
+                    query,
+                    str(item.get("kind", "")),
+                )
+                score = (
+                    relevance * 0.69
+                    + importance * 0.06
+                    + reinforcement * 0.025
+                    + recency * 0.08
+                    + kind_score
+                )
                 scored.append((score, item))
             scored.sort(key=lambda pair: pair[0], reverse=True)
             selected = [item for _, item in scored[:max(0, top_k)]]
@@ -139,6 +230,28 @@ class MemoryStore:
         with self._lock:
             episodes = [item for item in self.data["episodes"] if item.get("session_id") == session_id]
             return [dict(item) for item in episodes[-max(0, limit):]]
+
+    def durable_profile(self, session_id: str, limit: int = 6) -> list[str]:
+        with self._lock:
+            memories = [
+                item
+                for item in self.data["memories"]
+                if item.get("session_id") == session_id
+                and item.get("status", "active") == "active"
+                and int(item.get("importance", 1) or 1) >= 2
+            ]
+            memories.sort(
+                key=lambda item: (
+                    int(item.get("importance", 1) or 1),
+                    int(item.get("reinforcement_count", 1) or 1),
+                    str(item.get("updated_at", "")),
+                ),
+                reverse=True,
+            )
+            return [
+                str(item.get("text", ""))
+                for item in memories[:max(0, limit)]
+            ]
 
     def social_context(
         self,
@@ -210,12 +323,25 @@ class MemoryStore:
                 self.data["episodes"] = [
                     item for item in self.data["episodes"] if item.get("id") not in remove_ids
                 ]
+            self.data["consolidation"][session_id] = {
+                "episode_count": len(session_episodes),
+                "active_semantic_memories": sum(
+                    1
+                    for item in self.data["memories"]
+                    if item.get("session_id") == session_id
+                    and item.get("status", "active") == "active"
+                ),
+                "last_game_day": game_day,
+                "updated_at": utc_now(),
+            }
             self.save()
         return episode_id
 
 
 def extract_memories(player_input: str) -> list[tuple[str, str, int, str]]:
     text = clean_text(player_input)
+    if not text or is_unanchored_question(text):
+        return []
     memories: list[tuple[str, str, int, str]] = []
     patterns = [
         (r"(?:my name is|call me)\s+([A-Za-z0-9_]{1,24})", "Player prefers to be called {0}.", "profile", 3),
@@ -233,7 +359,163 @@ def extract_memories(player_input: str) -> list[tuple[str, str, int, str]]:
         if match:
             value = match.group(1).strip(" .,;:!?，。；：！？") if match.groups() else ""
             memories.append((template.format(value), kind, importance, match.group(0)))
-    return memories
+    if memories:
+        return deduplicate_extracted_memories(memories)
+
+    chinese_patterns = [
+        (
+            r"(?:我叫|请叫我|叫我)[，,：: ]*([\u4e00-\u9fffA-Za-z0-9_]{1,24})",
+            "玩家希望被称为{0}。",
+            "profile",
+            3,
+        ),
+        (
+            r"我(?:最|更)?(?:喜欢|偏爱)(.{1,48})",
+            "玩家喜欢{0}。",
+            "preference",
+            2,
+        ),
+        (
+            r"我(?:不喜欢|讨厌)(.{1,48})",
+            "玩家不喜欢{0}。",
+            "preference",
+            2,
+        ),
+        (
+            r"我(?:通常|习惯)(.{2,48})",
+            "玩家通常{0}。",
+            "profile",
+            2,
+        ),
+        (
+            r"我(?:觉得|认为)(.{2,60})",
+            "玩家认为{0}。",
+            "opinion",
+            2,
+        ),
+        (
+            r"我(?:的长期目标是|打算长期|一直想)(.{2,60})",
+            "玩家的长期目标是{0}。",
+            "goal",
+            2,
+        ),
+    ]
+    for pattern, template, kind, importance in chinese_patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        value = match.group(1).strip(" .,;:!?，。；：！？")
+        if not value or contains_question_marker(value):
+            continue
+        memories.append(
+            (template.format(value), kind, importance, match.group(0))
+        )
+    return deduplicate_extracted_memories(memories)
+
+
+def deduplicate_extracted_memories(
+    memories: list[tuple[str, str, int, str]],
+) -> list[tuple[str, str, int, str]]:
+    deduplicated: list[tuple[str, str, int, str]] = []
+    seen: set[str] = set()
+    for memory in memories:
+        normalized = normalize_text(memory[0])
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        deduplicated.append(memory)
+    return deduplicated
+
+
+def contains_question_marker(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    return (
+        "?" in normalized
+        or "？" in normalized
+        or normalized.startswith((
+            "who ", "what ", "when ", "where ", "why ", "how ",
+            "do you ", "are you ", "can you ", "would you ",
+            "谁", "什么", "什么时候", "哪里", "哪儿", "为什么", "怎么",
+            "你会", "你能", "你喜欢", "你觉得",
+        ))
+    )
+
+
+def is_unanchored_question(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    explicit_memory_request = any(marker in normalized for marker in (
+        "remember that", "remember,", "请记住", "记住：", "记住,",
+    ))
+    return contains_question_marker(normalized) and not explicit_memory_request
+
+
+def is_durable_player_evidence(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    if not normalized or is_unanchored_question(normalized):
+        return False
+    markers = (
+        "i am ", "i'm ", "my ", "i like", "i love", "i prefer",
+        "i dislike", "i hate", "i usually", "i always", "i never",
+        "i promise", "remember that", "call me", "my name is",
+        "我叫", "我是", "我的", "我喜欢", "我最喜欢", "我更喜欢",
+        "我偏爱", "我不喜欢", "我讨厌", "我通常", "我习惯",
+        "我觉得", "我认为", "我一直", "我从不", "我答应", "请记住", "记住",
+    )
+    return any(marker in normalized for marker in markers)
+
+
+def canonical_memory_key(text: str, kind: str) -> str:
+    normalized = normalize_text(text)
+    topic_markers: dict[str, tuple[str, ...]] = {
+        "name": ("called", "name", "称为", "名字", "我叫"),
+        "fishing": ("fishing", "fish", "钓鱼"),
+        "mining": ("mining", "mine", "矿洞", "采矿"),
+        "farming": ("farming", "crop", "种田", "种植", "作物"),
+        "rain": ("rain", "雨天", "下雨"),
+        "late_night": ("stay out late", "late", "pass out", "熬夜", "晚睡"),
+        "coffee": ("coffee", "咖啡"),
+        "hot_cocoa": ("hot cocoa", "可可"),
+        "money": ("money", "gold", "profit", "赚钱", "金币"),
+        "adventure": ("adventure", "explore", "冒险", "探索"),
+    }
+    for topic, markers in topic_markers.items():
+        if any(normalize_text(marker) in normalized for marker in markers):
+            return f"{kind}:{topic}"
+    return ""
+
+
+def memory_polarity(text: str) -> str:
+    normalized = normalize_text(text)
+    negative_markers = (
+        "do not like", "don't like", "dislike", "hate", "never",
+        "prefers not", "不喜欢", "讨厌", "不要", "从不",
+    )
+    positive_markers = (
+        "like", "love", "prefer", "enjoy", "喜欢", "偏爱", "爱好",
+    )
+    if any(normalize_text(marker) in normalized for marker in negative_markers):
+        return "negative"
+    if any(normalize_text(marker) in normalized for marker in positive_markers):
+        return "positive"
+    return "unknown"
+
+
+def memory_kind_query_score(query: str, kind: str) -> float:
+    normalized = normalize_text(query)
+    markers: dict[str, tuple[str, ...]] = {
+        "profile": ("who am i", "my name", "about me", "我是谁", "我的名字"),
+        "preference": (
+            "what do i like", "prefer", "favorite", "我喜欢", "偏好", "最喜欢",
+        ),
+        "promise": ("promise", "agreed", "答应", "约定"),
+        "opinion": ("think about", "opinion", "态度", "怎么看"),
+        "goal": ("goal", "plan", "目标", "打算"),
+        "note": ("remember", "记得", "记住"),
+    }
+    return 0.12 if any(
+        normalize_text(marker) in normalized
+        for marker in markers.get(kind, ())
+    ) else 0.0
 
 
 def detect_intimacy_level(text: str) -> str:

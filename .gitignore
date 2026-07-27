@@ -31,6 +31,7 @@ backend/data/memory/
 backend/data/traces/
 backend/data/test_runs/*
 !backend/data/test_runs/golden_eval_20260727T091514Z.json
+!backend/data/test_runs/golden_eval_20260727T103718Z.json
 
 # Bundled runtime copied into the mod; rebuild it from backend source.
 StardewAgentFramework/Backend/

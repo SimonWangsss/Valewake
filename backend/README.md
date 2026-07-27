@@ -8,10 +8,12 @@ It is intentionally separate from the earlier Unity/Yu Gong prototype. It has it
 
 - `/chat` endpoint for the SMAPI mod.
 - Mock or OpenAI-compatible LLM client.
-- Per-save and per-NPC player memory in JSON.
-- Semantic player memory plus bounded cross-session episodic memory.
+- Per-save and per-NPC player memory in JSON schema v3.
+- Conversation, episodic, semantic-retrieval, and durable-profile memory layers.
+- Semantic deduplication, contradiction supersession, and grounded candidate validation.
 - Social-context analysis for repetition, time gaps, intimacy mismatch, and boundary pressure.
-- Lightweight hybrid JSONL RAG for Stardew mechanics, Abigail persona, relationships, and boundaries.
+- Topic-routed BM25 + character n-gram TF-IDF vector retrieval.
+- 54 atomic Lore chunks linked to foundation chunks through `parent_id`.
 - A deterministic Dialogue Policy layer before generation and relationship application.
 - Structured NPC replies with relationship-effect and future action proposals.
 - Short-term continuous-dialogue history supplied by the SMAPI client.
@@ -80,6 +82,13 @@ Run the deterministic Dialogue System v2 suite without an API call:
 
 ```powershell
 .\.venv\Scripts\python.exe .\eval\run_dialogue_eval.py
+```
+
+Run the focused v3 core tests for query routing, contradiction handling,
+durable profiles, candidate rejection, and Chinese policy boundaries:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest .\eval\test_dialogue_core_v3.py -v
 ```
 
 Score real gameplay traces for role leakage, grounded relationship effects, emotion validity, and policy enforcement:
