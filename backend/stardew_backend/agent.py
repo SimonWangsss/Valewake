@@ -53,9 +53,12 @@ class StardewAgent:
         )
         game_day = game_day_from_state(game_state)
         relationship = relationship_from_state(game_state)
+        conversation_history = self._normalize_conversation_history(conversation_history or [])
         social_context = self.memory.social_context(player_input, session_id, game_day, relationship)
-        dialogue_policy = self.dialogue_policy.analyze(player_input, game_state, social_context)
-        saved_memories = self._save_memories(player_input, session_id, game_day)
+        dialogue_policy = self.dialogue_policy.analyze(
+            player_input, game_state, social_context, conversation_history
+        )
+        saved_memories: list[str] = []
         tags = self._rag_tags(game_state)
         tags.extend(dialogue_policy["risk_types"])
         lore_matches = self.rag.search_details(
@@ -70,7 +73,6 @@ class StardewAgent:
         )
         durable_profile = self.memory.durable_profile(session_id, limit=6)
         retrieved_episodes = self.memory.recent_episodes(session_id, limit=6)
-        conversation_history = self._normalize_conversation_history(conversation_history or [])
         messages = self._build_messages(
             player_input,
             game_state,
@@ -124,6 +126,16 @@ class StardewAgent:
             generation.get("action_proposal"),
             player_input,
         )
+        leakage_reasons = output_leakage_reasons(generation["reply"])
+        if leakage_reasons:
+            dialogue_policy["response_stance"] = "refuse_in_character"
+            dialogue_policy["risk_types"] = list(dict.fromkeys(
+                [*dialogue_policy.get("risk_types", []), "output_leakage"]
+            ))
+            dialogue_policy["output_leakage_reasons"] = leakage_reasons
+            dialogue_policy["block_positive_relationship_effect"] = True
+            dialogue_policy["block_memory_write"] = True
+            dialogue_policy["block_action_proposal"] = True
         reply = self._post_check(generation["reply"], player_input)
         emotion = self._constrain_emotion(
             generation["emotion"],
@@ -132,15 +144,21 @@ class StardewAgent:
         )
         if npc_profile.get("age_group") == "child" and emotion == "affectionate":
             emotion = "happy"
-        saved_memories.extend(
-            self._save_memory_candidates(
-                player_input, session_id, generation["memory_candidates"], game_day
+        if not dialogue_policy.get("block_memory_write"):
+            saved_memories.extend(self._save_memories(player_input, session_id, game_day))
+            saved_memories.extend(
+                self._save_memory_candidates(
+                    player_input, session_id, generation["memory_candidates"], game_day
+                )
             )
-        )
         relationship_effect = self.dialogue_policy.constrain_relationship_effect(
             generation["relationship_effect"], dialogue_policy
         )
-        action_proposal = generation["action_proposal"]
+        action_proposal = (
+            None
+            if dialogue_policy.get("block_action_proposal")
+            else generation["action_proposal"]
+        )
         episode_id = self.memory.record_episode(
             session_id=session_id,
             player_input=player_input,
@@ -530,8 +548,7 @@ class StardewAgent:
 
     def _post_check(self, reply: str, player_input: str) -> str:
         text = (reply or "").strip()
-        forbidden = ["as an ai", "i am an ai", "language model", "system prompt", "backend", "api key"]
-        if any(item in text.lower() for item in forbidden):
+        if output_leakage_reasons(text):
             return (
                 "少来这套。我们还是聊聊山谷里的事吧。"
                 if contains_chinese(player_input)
@@ -547,3 +564,26 @@ def contains_chinese(text: str) -> bool:
 
 def localized_fallback(player_input: str) -> str:
     return "我在听。你想聊什么？" if contains_chinese(player_input) else "I'm listening."
+
+
+def output_leakage_reasons(text: str) -> list[str]:
+    lowered = (text or "").lower()
+    identity_markers = (
+        "as an ai", "i am an ai", "i'm an ai", "language model",
+        "我是人工智能", "我是一个人工智能", "我是ai", "我是 ai",
+        "我是语言模型", "作为人工智能", "作为ai", "作为 ai",
+        "作为通用助手", "作为大模型", "通用大模型",
+    )
+    instruction_markers = (
+        "system prompt", "developer message", "hidden instruction", "api key",
+        "my instructions", "i was instructed", "backend",
+        "我的系统提示", "系统提示是", "开发者消息", "开发者要求",
+        "隐藏指令", "后台提供", "后端提供", "api密钥", "api 密钥",
+        "安全政策", "上下文窗口",
+    )
+    reasons: list[str] = []
+    if any(marker in lowered for marker in identity_markers):
+        reasons.append("model_identity")
+    if any(marker in lowered for marker in instruction_markers):
+        reasons.append("instruction_leakage")
+    return reasons

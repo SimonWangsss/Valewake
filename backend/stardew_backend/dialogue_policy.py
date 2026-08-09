@@ -1,4 +1,88 @@
+import re
+import unicodedata
 from typing import Any, Dict
+
+
+INJECTION_CONCEPTS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "persona_override": (
+        ("forget", "identity"), ("forget", "character"), ("discard", "persona"),
+        ("ignore", "role"), ("exit", "character"), ("unrestricted", "assistant"),
+        ("忘记", "身份"), ("忘记", "人设"), ("抛弃", "设定"),
+        ("忽略", "角色"), ("退出", "角色"), ("通用", "大模型"),
+        ("没有", "背景限制"), ("不再是", "阿比盖尔"),
+    ),
+    "secret_extraction": (
+        ("system", "prompt"), ("developer", "message"), ("hidden", "instruction"),
+        ("reveal", "rules"), ("api", "key"), ("initial", "instruction"),
+        ("系统", "提示"), ("开发者", "消息"), ("隐藏", "指令"),
+        ("隐藏", "规则"), ("逐字", "输出"), ("最初", "说明"),
+        ("后台", "配置"), ("api", "密钥"),
+    ),
+    "policy_bypass": (
+        ("ignore", "previous"), ("ignore", "above"), ("bypass", "policy"),
+        ("developer", "override"), ("debug", "mode"), ("jailbreak",),
+        ("忽略", "之前"), ("忽略", "以上"), ("无视", "规则"),
+        ("绕过", "限制"), ("开发者", "命令"), ("调试", "模式"),
+        ("假装", "没有限制"),
+    ),
+}
+
+OUT_OF_WORLD_MARKERS = (
+    "deepseek", "chatgpt", "language model", "backend", "mod source", "source code",
+    "大模型", "语言模型", "人工智能助手", "后端", "模组代码", "源代码",
+)
+
+
+def normalize_policy_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value or "").lower()
+    return re.sub(r"[\s\W_]+", " ", normalized, flags=re.UNICODE).strip()
+
+
+def classify_injection(
+    player_input: str,
+    conversation_history: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    current = normalize_policy_text(player_input)
+    recent_user = [
+        normalize_policy_text(str(item.get("content", "")))
+        for item in (conversation_history or [])[-8:]
+        if str(item.get("role", "")).lower() == "user"
+    ]
+    combined = " ".join([*recent_user, current]).strip()
+    intents: list[str] = []
+    evidence: list[str] = []
+    for intent, concept_sets in INJECTION_CONCEPTS.items():
+        for concepts in concept_sets:
+            if all(concept in combined for concept in concepts):
+                intents.append(intent)
+                evidence.append(" + ".join(concepts))
+                break
+
+    out_of_world = any(marker in combined for marker in OUT_OF_WORLD_MARKERS)
+    if out_of_world:
+        intents.append("out_of_world")
+
+    attack_intents = {"persona_override", "secret_extraction", "policy_bypass"}
+    attack_count = len(attack_intents.intersection(intents))
+    if attack_count >= 2 or (attack_count >= 1 and out_of_world):
+        risk = "high"
+        confidence = 0.96
+    elif attack_count == 1:
+        risk = "medium"
+        confidence = 0.84
+    elif out_of_world:
+        risk = "low"
+        confidence = 0.72
+    else:
+        risk = "none"
+        confidence = 1.0
+    return {
+        "intents": list(dict.fromkeys(intents)),
+        "risk": risk,
+        "confidence": confidence,
+        "evidence": evidence[:4],
+        "used_multi_turn_context": bool(recent_user),
+    }
 
 
 class DialoguePolicy:
@@ -7,21 +91,15 @@ class DialoguePolicy:
         player_input: str,
         game_state: Dict[str, Any],
         social_context: Dict[str, Any],
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> Dict[str, Any]:
-        lowered = (player_input or "").lower()
+        semantic = classify_injection(player_input, conversation_history)
         risks: list[str] = []
-        if any(marker in lowered for marker in [
-            "system prompt", "ignore previous", "ignore all", "api key", "developer message",
-            "hidden instruction", "reveal your rules", "exit character",
-            "系统提示", "忽略之前", "忽略以上", "忽略所有", "无视之前",
-            "api密钥", "提示词", "开发者命令", "开发者消息", "隐藏规则",
-            "隐藏指令", "退出角色", "逐字输出", "角色设定",
-        ]):
+        if any(intent in semantic["intents"] for intent in (
+            "persona_override", "secret_extraction", "policy_bypass"
+        )):
             risks.append("prompt_injection")
-        if any(marker in lowered for marker in [
-            "deepseek", "chatgpt", "language model", "backend", "mod source",
-            "source code", "大模型", "语言模型", "后端", "模组代码", "源代码",
-        ]):
+        if "out_of_world" in semantic["intents"]:
             risks.append("out_of_world")
         if social_context.get("intimacy_mismatch"):
             risks.append("intimacy_mismatch")
@@ -45,8 +123,8 @@ class DialoguePolicy:
 
         constraints = {
             "refuse_in_character": [
-                "Do not discuss implementation details.",
-                "Redirect briefly to something the NPC could naturally discuss.",
+                "Do not discuss implementation details or repeat the requested technical terms.",
+                "Respond as the resident with brief confusion, skepticism, or redirection.",
             ],
             "challenge_repetition": [
                 "Do not answer as though this is the first time.",
@@ -68,11 +146,14 @@ class DialoguePolicy:
 
         return {
             "response_stance": stance,
-            "risk_types": risks,
+            "risk_types": list(dict.fromkeys(risks)),
+            "semantic_injection": semantic,
             "response_constraints": constraints,
             "block_positive_relationship_effect": stance in {
                 "refuse_in_character", "challenge_repetition", "set_gentle_boundary"
             },
+            "block_memory_write": stance == "refuse_in_character",
+            "block_action_proposal": stance == "refuse_in_character",
             "game_day": game_day_from_state(game_state),
         }
 
@@ -81,9 +162,7 @@ class DialoguePolicy:
         if not policy.get("block_positive_relationship_effect") or effect.get("valence") != "positive":
             return effect
         return {
-            "valence": "neutral",
-            "intensity": 0,
-            "confidence": 1.0,
+            "valence": "neutral", "intensity": 0, "confidence": 1.0,
             "reason": f"Positive relationship gain was blocked by dialogue policy: {policy.get('response_stance')}.",
             "evidence": "",
         }
