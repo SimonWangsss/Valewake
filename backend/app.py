@@ -31,6 +31,18 @@ class MemorySessionRequest(BaseModel):
     session_prefix: str
 
 
+class TraceEventRequest(BaseModel):
+    event: str
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TraceMarkRequest(BaseModel):
+    turn_id: str
+    label: str
+    note: str = ""
+    tags: list[str] = Field(default_factory=list)
+
+
 app = FastAPI(title="Valewake Backend")
 settings = Settings.from_env()
 agent = StardewAgent(settings)
@@ -41,8 +53,8 @@ def health() -> Dict[str, Any]:
     return {
         "ok": True,
         "project": "valewake",
-        "version": "0.9.1",
-        "dialogue_system": "v5-action-proposals",
+        "version": "0.10.0",
+        "dialogue_system": "v6-mine-expeditions",
         "memory_schema": 3,
         "lore_chunks": len(agent.rag.chunks),
         "curated_npc_profiles": agent.personas.curated_count,
@@ -75,3 +87,27 @@ def commit_memory(request: MemorySessionRequest) -> Dict[str, Any]:
 def rollback_memory(request: MemorySessionRequest) -> Dict[str, Any]:
     agent.memory.rollback_session(request.session_prefix)
     return {"ok": True, "operation": "rollback", "session_prefix": request.session_prefix}
+
+
+@app.post("/trace/event")
+def trace_event(request: TraceEventRequest) -> Dict[str, Any]:
+    event_id = agent.trace.append_event(request.event, request.payload)
+    return {"ok": True, "event_id": event_id}
+
+
+@app.post("/trace/mark")
+def trace_mark(request: TraceMarkRequest) -> Dict[str, Any]:
+    allowed = {
+        "keep", "reject", "boundary", "memory_good", "memory_bad",
+        "action_good", "action_bad",
+    }
+    label = request.label.strip().lower()
+    if label not in allowed:
+        return {"ok": False, "error": "unsupported_label", "allowed": sorted(allowed)}
+    annotation_id = agent.trace.append_annotation(
+        request.turn_id.strip(),
+        label,
+        request.note.strip(),
+        [tag.strip() for tag in request.tags if tag.strip()][:12],
+    )
+    return {"ok": True, "annotation_id": annotation_id}

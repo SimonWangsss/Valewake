@@ -27,6 +27,15 @@ class ActionIntentTests(unittest.TestCase):
             "clear_weeds",
         )
 
+    def test_detects_bounded_tree_chopping_request(self) -> None:
+        self.assertEqual(requested_action("可以帮我砍几棵树吗？"), "chop_trees")
+        result = normalize_action_proposal(
+            {"action": "chop_trees", "disposition": "accept", "confidence": 0.9},
+            "可以帮我砍几棵树吗？",
+        )
+        assert result is not None
+        self.assertEqual(result["parameters"]["location"], "Farm")
+
     def test_ordinary_dialogue_has_no_action(self) -> None:
         self.assertEqual(
             requested_action(
@@ -34,6 +43,22 @@ class ActionIntentTests(unittest.TestCase):
             ),
             "",
         )
+
+    def test_detects_mine_expedition_and_priority(self) -> None:
+        text = "\u966a\u6211\u4e0b\u77ff\u63a2\u9669\uff0c\u4f18\u5148\u627e\u94c1\u77ff"
+        self.assertEqual(requested_action(text), "mine_expedition")
+        result = normalize_action_proposal(
+            {"action": "mine_expedition", "disposition": "accept", "confidence": 0.9},
+            text,
+        )
+        assert result is not None
+        self.assertEqual(result["parameters"]["resource_priority"], "iron")
+
+    def test_detects_bounded_mine_actions(self) -> None:
+        self.assertEqual(requested_action("\u5e2e\u6211\u6253\u602a\u4fdd\u62a4\u6211"), "defend_player")
+        self.assertEqual(requested_action("\u5e2e\u6211\u6316\u8fd9\u5757\u77f3\u5934"), "mine_target")
+        self.assertEqual(requested_action("\u5e2e\u6211\u6316\u9644\u8fd1\u7684\u77ff\u77f3"), "mine_nearby")
+        self.assertEqual(requested_action("\u966a\u6211\u4e0b\u77ff"), "join_mine_expedition")
 
 
 class ActionProposalTests(unittest.TestCase):
@@ -135,8 +160,11 @@ class ActionLoreConsistencyTests(unittest.TestCase):
             / "agent_capabilities.jsonl"
         )
         text = lore_path.read_text(encoding="utf-8")
-        self.assertIn("confirmed watering", text)
-        self.assertIn("strict weed-clearing", text)
+        self.assertIn("eligible watering", text)
+        self.assertIn("strict weed clearing", text)
+        self.assertIn("mature untapped wild trees", text)
+        self.assertIn("following between levels", text)
+        self.assertIn("mining allowlisted rocks", text)
         self.assertNotIn("cannot yet move the NPC", text)
 
 

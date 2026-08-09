@@ -51,6 +51,8 @@ public sealed class ActionJobManager
         Save();
     }
 
+    public bool HasActiveJob(string npcName) => GetActiveJob(npcName) is not null;
+
     public ActionProposalDecision Evaluate(
         AgentActionProposal proposal,
         NPC npc,
@@ -108,10 +110,17 @@ public sealed class ActionJobManager
                     $"Let {npc.displayName} clear up to {Math.Min(requestedMaximum, config.MaxWeedsPerJob)} nearby weeds?",
                     Math.Min(requestedMaximum, config.MaxWeedsPerJob)
                 ),
+            ActionIds.ChopTrees when config.EnableChopTreesAction =>
+                ActionProposalDecision.Allow(
+                    $"Let {npc.displayName} chop up to {Math.Min(requestedMaximum, config.MaxTreesPerJob)} mature untapped farm trees?",
+                    Math.Min(requestedMaximum, config.MaxTreesPerJob)
+                ),
             ActionIds.WaterCrops =>
                 ActionProposalDecision.Reject("Watering jobs are disabled."),
             ActionIds.ClearWeeds =>
                 ActionProposalDecision.Reject("Weeding jobs are disabled."),
+            ActionIds.ChopTrees =>
+                ActionProposalDecision.Reject("Tree-chopping jobs are disabled."),
             _ => ActionProposalDecision.Reject("That action is not on the local allowlist.")
         };
     }
@@ -119,12 +128,13 @@ public sealed class ActionJobManager
     public ActionJob Accept(
         AgentActionProposal proposal,
         NPC npc,
-        ActionProposalDecision decision)
+        ActionProposalDecision decision,
+        string sourceTurnId)
     {
-        bool playerIsOnFarm = Game1.player.currentLocation is Farm;
         ActionJob job = new()
         {
             JobId = $"job_{Guid.NewGuid():N}"[..16],
+            SourceTurnId = sourceTurnId,
             ProposalId = proposal.ProposalId,
             SaveId = Constants.SaveFolderName ?? "",
             NpcName = npc.Name,
@@ -133,8 +143,10 @@ public sealed class ActionJobManager
             MaxTargets = decision.MaxTargets,
             CreatedDay = Game1.Date.TotalDays,
             CreatedTime = Game1.timeOfDay,
-            AnchorX = playerIsOnFarm ? (int)Game1.player.Tile.X : -1,
-            AnchorY = playerIsOnFarm ? (int)Game1.player.Tile.Y : -1,
+            // Farm-help requests target eligible farm tiles, not whichever tiles happen
+            // to be near the player when they enter the map.
+            AnchorX = -1,
+            AnchorY = -1,
             ReturnContext = new ActionReturnContext
             {
                 OriginKind = npc.currentLocation switch
@@ -163,12 +175,14 @@ public sealed class ActionJobManager
     public void TraceProposalDecision(
         AgentActionProposal proposal,
         NPC npc,
-        ActionProposalDecision decision)
+        ActionProposalDecision decision,
+        string sourceTurnId)
     {
         AppendTrace(new
         {
             timestamp = DateTimeOffset.UtcNow,
             event_name = "proposal_validated",
+            turn_id = sourceTurnId,
             proposal_id = proposal.ProposalId,
             npc_name = npc.Name,
             action = proposal.Action,
@@ -184,12 +198,14 @@ public sealed class ActionJobManager
     public void TraceConfirmation(
         AgentActionProposal proposal,
         NPC npc,
-        bool confirmed)
+        bool confirmed,
+        string sourceTurnId)
     {
         AppendTrace(new
         {
             timestamp = DateTimeOffset.UtcNow,
             event_name = confirmed ? "confirmation_accepted" : "confirmation_declined",
+            turn_id = sourceTurnId,
             proposal_id = proposal.ProposalId,
             npc_name = npc.Name,
             action = proposal.Action,
@@ -258,9 +274,9 @@ public sealed class ActionJobManager
         switch (job.State)
         {
             case ActionJobStates.Accepted:
-                ReserveNpc(npc);
                 if (npc.currentLocation is Farm)
                 {
+                    ReserveNpc(npc);
                     Transition(job, ActionJobStates.Preparing, "NPC is already on the farm.");
                 }
                 else if (!config.EnableCrossMapDispatch)
@@ -272,20 +288,20 @@ public sealed class ActionJobManager
                     job.RuntimeNextTick = Game1.ticks + 60;
                     job.RuntimeDispatchDeadlineTick =
                         Game1.ticks + Math.Max(10, config.CrossMapDispatchWaitSeconds) * 60L;
-                    Transition(job, ActionJobStates.Dispatching, "Waiting for the player to enter the farm.");
+                    Transition(job, ActionJobStates.Dispatching, "Waiting for a believable off-screen departure.");
                 }
                 break;
 
             case ActionJobStates.Dispatching:
                 if (Game1.ticks < job.RuntimeNextTick)
                     return;
-                if (Game1.player.currentLocation is not Farm)
+                if (npc.currentLocation == Game1.player.currentLocation)
                 {
                     if (Game1.ticks >= job.RuntimeDispatchDeadlineTick)
-                        Fail(job, "The player did not reach the farm before dispatch timed out.", terminal: false);
+                        Fail(job, "The NPC could not leave without disappearing in front of the player.", terminal: false);
                     return;
                 }
-                if (job.RuntimeFarmArrivalTick == 0)
+                if (Game1.player.currentLocation is Farm && job.RuntimeFarmArrivalTick == 0)
                 {
                     job.RuntimeFarmArrivalTick = Game1.ticks;
                     Game1.addHUDMessage(new HUDMessage(
@@ -293,22 +309,24 @@ public sealed class ActionJobManager
                     ));
                     return;
                 }
-                if (Game1.ticks - job.RuntimeFarmArrivalTick <
+                if (Game1.player.currentLocation is Farm &&
+                    Game1.ticks - job.RuntimeFarmArrivalTick <
                     Math.Max(0, config.CrossMapFarmLeadSeconds) * 60L)
                 {
                     return;
                 }
                 ReserveNpc(npc);
-                job.AnchorX = (int)Game1.player.Tile.X;
-                job.AnchorY = (int)Game1.player.Tile.Y;
                 Vector2 entry = job.ReturnContext.OriginKind == ActionOriginKinds.FarmHouse
                     ? FindFarmHouseExteriorEntry(farm)
                     : FindFarmBoundaryEntry(farm);
                 job.RuntimeDispatchTile = new ActionTile((int)entry.X, (int)entry.Y);
                 Game1.warpCharacter(npc, farm, entry);
-                Game1.addHUDMessage(new HUDMessage(
-                    $"{npc.displayName} arrived at the farm and is walking to the work area."
-                ));
+                if (Game1.player.currentLocation is Farm)
+                {
+                    Game1.addHUDMessage(new HUDMessage(
+                        $"{npc.displayName} arrived at the farm and is walking to the work area."
+                    ));
+                }
                 Transition(
                     job,
                     ActionJobStates.Preparing,
@@ -331,23 +349,103 @@ public sealed class ActionJobManager
                     BeginReturn(job, npc, farm, "No eligible targets were found.");
                     return;
                 }
+                if (Game1.player.currentLocation is not Farm && config.EnableOffscreenFarmWork)
+                {
+                    job.RuntimeBackgroundNextTick = Game1.ticks +
+                        Math.Max(1, config.OffscreenWorkIntervalSeconds) * 60L;
+                    Transition(job, ActionJobStates.BackgroundWorking, "NPC started working off-screen.");
+                    return;
+                }
                 StartNextTarget(job, npc, farm);
                 break;
 
             case ActionJobStates.Navigating:
+                if (Game1.player.currentLocation is not Farm && config.EnableOffscreenFarmWork)
+                {
+                    EnterBackgroundWork(job, npc);
+                    return;
+                }
                 UpdateNavigation(job, npc, farm);
                 break;
 
             case ActionJobStates.Acting:
+                if (Game1.player.currentLocation is not Farm && config.EnableOffscreenFarmWork)
+                {
+                    EnterBackgroundWork(job, npc);
+                    return;
+                }
                 if (Game1.ticks < job.RuntimeNextTick)
                     return;
                 ExecuteCurrentTarget(job, npc, farm);
                 break;
 
+            case ActionJobStates.BackgroundWorking:
+                UpdateBackgroundWork(job, npc, farm);
+                break;
+
             case ActionJobStates.Returning:
+                if (Game1.player.currentLocation is not Farm)
+                {
+                    GameLocation? returnLocation =
+                        Game1.getLocationFromName(job.ReturnContext.LocationName);
+                    if (returnLocation is not null &&
+                        returnLocation == Game1.player.currentLocation)
+                    {
+                        job.LastMessage = "Waiting to restore the NPC without appearing in front of the player.";
+                        return;
+                    }
+                    Complete(job, job.LastMessage + " NPC left the farm off-screen.");
+                    return;
+                }
                 UpdateReturn(job, npc, farm);
                 break;
         }
+    }
+
+    private void EnterBackgroundWork(ActionJob job, NPC npc)
+    {
+        npc.controller = null;
+        npc.Halt();
+        npc.Sprite.ClearAnimation();
+        job.RuntimeStandTile = null;
+        job.RuntimeBackgroundNextTick = Game1.ticks +
+            Math.Max(1, config.OffscreenWorkIntervalSeconds) * 60L;
+        Transition(job, ActionJobStates.BackgroundWorking, "Player left; work continues off-screen.");
+    }
+
+    private void UpdateBackgroundWork(ActionJob job, NPC npc, Farm farm)
+    {
+        if (Game1.player.currentLocation is Farm)
+        {
+            job.RuntimeStandTile = null;
+            job.RuntimeStandCandidates.Clear();
+            Transition(job, ActionJobStates.Preparing, "Player returned; resuming visible work.");
+            return;
+        }
+        if (!Game1.shouldTimePass() || Game1.ticks < job.RuntimeBackgroundNextTick)
+            return;
+        if (job.CurrentTargetIndex >= job.Targets.Count)
+        {
+            Complete(job, $"{job.CompletedTargets} targets completed and {job.FailedTargets} skipped.");
+            return;
+        }
+
+        ActionTile target = job.Targets[job.CurrentTargetIndex];
+        List<ActionTile> stands = FindStandTiles(farm, target, npc.Tile);
+        if (stands.Count > 0)
+            npc.Position = new Vector2(stands[0].X * 64f, stands[0].Y * 64f);
+        ExecuteCurrentTarget(job, npc, farm);
+        if (job.CurrentTargetIndex >= job.Targets.Count)
+        {
+            Complete(job, $"{job.CompletedTargets} targets completed and {job.FailedTargets} skipped.");
+            return;
+        }
+        job.State = ActionJobStates.BackgroundWorking;
+        job.RuntimeBackgroundNextTick = Game1.ticks +
+            Math.Max(1, config.OffscreenWorkIntervalSeconds) * 60L;
+        job.LastMessage = "Off-screen work unit completed.";
+        Save();
+        Trace(job, "background_target_completed");
     }
 
     private void StartNextTarget(ActionJob job, NPC npc, Farm farm)
@@ -396,10 +494,9 @@ public sealed class ActionJobManager
             npc.Halt();
             ActionTile target = job.Targets[job.CurrentTargetIndex];
             npc.FacingDirection = FacingToward(stand, target);
-            StartWorkAnimation(npc);
-            Game1.playSound(job.Action == ActionIds.WaterCrops ? "wateringCan" : "cut");
+            StartVisibleWorkAnimation(job, npc);
             job.RuntimeActionStartedTick = Game1.ticks;
-            job.RuntimeNextTick = Game1.ticks + 54;
+            job.RuntimeNextTick = Game1.ticks + (job.Action == ActionIds.ChopTrees ? 18 : 54);
             Transition(job, ActionJobStates.Acting, "Playing the work animation.");
             return;
         }
@@ -459,12 +556,51 @@ public sealed class ActionJobManager
     {
         ActionTile target = job.Targets[job.CurrentTargetIndex];
         Vector2 tile = new(target.X, target.Y);
+        job.LastTargetType = job.Action == ActionIds.WaterCrops ? "crop" : "weed";
+        if (job.Action == ActionIds.ChopTrees)
+            job.LastTargetType = "mature_tree";
+        job.LastTargetQualifiedId = farm.Objects.TryGetValue(tile, out StardewValley.Object? targetObject)
+            ? targetObject.QualifiedItemId ?? ""
+            : "";
+        job.LastTargetAllowed = job.Action switch
+        {
+            ActionIds.WaterCrops => farm.terrainFeatures.TryGetValue(tile, out TerrainFeature? feature) &&
+                                    feature is HoeDirt dirt && dirt.crop is not null && !dirt.crop.dead.Value,
+            ActionIds.ClearWeeds => targetObject is not null && IsStrictWeed(targetObject),
+            ActionIds.ChopTrees => farm.terrainFeatures.TryGetValue(tile, out TerrainFeature? treeFeature) &&
+                                   treeFeature is Tree tree && IsStrictTree(tree, initialTarget: false),
+            _ => false
+        };
+        if (job.Action == ActionIds.ChopTrees)
+        {
+            TreeWorkResult treeResult = ChopTree(farm, tile);
+            job.LastTargetAllowed = treeResult.WasEligible;
+            npc.Sprite.ClearAnimation();
+            if (treeResult.NeedsMoreStrikes && job.RuntimeTargetStrikes < 20)
+            {
+                job.RuntimeTargetStrikes++;
+                StartVisibleWorkAnimation(job, npc);
+                job.RuntimeActionStartedTick = Game1.ticks;
+                job.RuntimeNextTick = Game1.ticks + 18;
+                job.LastMessage = "Tree strike completed; continuing the same target.";
+                Save();
+                Trace(job, "target_strike");
+                return;
+            }
+            CompleteCurrentTarget(job, npc, treeResult.Completed);
+            return;
+        }
         bool success = job.Action switch
         {
             ActionIds.WaterCrops => WaterTile(farm, tile),
             ActionIds.ClearWeeds => ClearWeed(farm, tile),
             _ => false
         };
+        CompleteCurrentTarget(job, npc, success);
+    }
+
+    private void CompleteCurrentTarget(ActionJob job, NPC npc, bool success)
+    {
         npc.Sprite.ClearAnimation();
         if (success)
             job.CompletedTargets++;
@@ -473,6 +609,7 @@ public sealed class ActionJobManager
         job.CurrentTargetIndex++;
         job.RuntimeStandTile = null;
         job.RuntimeStandCandidates.Clear();
+        job.RuntimeTargetStrikes = 0;
         job.State = ActionJobStates.Preparing;
         job.LastMessage = success ? "Target completed and verified." : "Target was no longer eligible.";
         Save();
@@ -481,9 +618,7 @@ public sealed class ActionJobManager
 
     private List<ActionTile> FindTargets(ActionJob job, Farm farm)
     {
-        Vector2 anchor = job.AnchorX >= 0
-            ? new Vector2(job.AnchorX, job.AnchorY)
-            : FindFarmBoundaryEntry(farm);
+        Vector2 anchor = FindFarmBoundaryEntry(farm);
         IEnumerable<Vector2> candidates = job.Action switch
         {
             ActionIds.WaterCrops => farm.terrainFeatures.Pairs
@@ -497,10 +632,14 @@ public sealed class ActionJobManager
             ActionIds.ClearWeeds => farm.Objects.Pairs
                 .Where(pair => IsStrictWeed(pair.Value))
                 .Select(pair => pair.Key),
+            ActionIds.ChopTrees => farm.terrainFeatures.Pairs
+                .Where(pair => pair.Value is Tree tree && IsStrictTree(tree, initialTarget: true))
+                .Select(pair => pair.Key),
             _ => Enumerable.Empty<Vector2>()
         };
         return candidates
-            .Where(tile => TileDistance(tile, anchor) <= config.ActionTargetRadiusTiles || job.AnchorX < 0)
+            .Where(tile => job.AnchorX < 0 ||
+                TileDistance(tile, anchor) <= config.ActionTargetRadiusTiles)
             .OrderBy(tile => TileDistance(tile, anchor))
             .Take(job.MaxTargets)
             .Select(tile => new ActionTile((int)tile.X, (int)tile.Y))
@@ -536,6 +675,52 @@ public sealed class ActionJobManager
         string name = obj.Name ?? "";
         return WeedIds.Contains(obj.QualifiedItemId ?? "") ||
                name.Equals("Weeds", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static TreeWorkResult ChopTree(Farm farm, Vector2 tile)
+    {
+        if (!farm.terrainFeatures.TryGetValue(tile, out TerrainFeature? feature) ||
+            feature is not Tree tree ||
+            !IsStrictTree(tree, initialTarget: false))
+        {
+            return new TreeWorkResult();
+        }
+        Axe axe = new() { UpgradeLevel = Math.Clamp(Game1.player.ForagingLevel / 2, 0, 4) };
+        axe.lastUser = Game1.player;
+        bool removed = tree.performToolAction(axe, 0, tile);
+        if (removed)
+            farm.terrainFeatures.Remove(tile);
+        return new TreeWorkResult
+        {
+            WasEligible = true,
+            Completed = removed && !farm.terrainFeatures.ContainsKey(tile),
+            NeedsMoreStrikes = !removed && farm.terrainFeatures.ContainsKey(tile)
+        };
+    }
+
+    private static bool IsStrictTree(Tree tree, bool initialTarget)
+    {
+        if (tree.growthStage.Value < Tree.treeStage || tree.tapped.Value)
+            return false;
+        return !initialTarget || !tree.stump.Value;
+    }
+
+    private static void StartVisibleWorkAnimation(ActionJob job, NPC npc)
+    {
+        if (job.Action == ActionIds.ChopTrees)
+        {
+            NpcToolAnimation.Play(npc, NpcToolKind.Axe);
+            return;
+        }
+        StartWorkAnimation(npc);
+        Game1.playSound(job.Action == ActionIds.WaterCrops ? "wateringCan" : "cut");
+    }
+
+    private sealed class TreeWorkResult
+    {
+        public bool WasEligible { get; init; }
+        public bool Completed { get; init; }
+        public bool NeedsMoreStrikes { get; init; }
     }
 
     private static List<ActionTile> FindStandTiles(GameLocation location, ActionTile target, Vector2 npcTile)
@@ -973,6 +1158,7 @@ public sealed class ActionJobManager
         {
             timestamp = DateTimeOffset.UtcNow,
             event_name = eventName,
+            turn_id = job.SourceTurnId,
             job_id = job.JobId,
             proposal_id = job.ProposalId,
             save_id = job.SaveId,
@@ -986,7 +1172,17 @@ public sealed class ActionJobManager
             current_target = currentTarget,
             dispatch_tile = job.RuntimeDispatchTile,
             return_tile = job.RuntimeReturnTile,
+            target_type = job.LastTargetType,
+            target_qualified_id = job.LastTargetQualifiedId,
+            target_allowed = job.LastTargetAllowed,
             npc_location = npc?.currentLocation?.NameOrUniqueName,
+            return_location = job.ReturnContext.LocationName,
+            location_restored = npc is not null && string.Equals(
+                npc.currentLocation?.NameOrUniqueName,
+                job.ReturnContext.LocationName,
+                StringComparison.Ordinal
+            ),
+            schedule_restored = npc is not null && npc.followSchedule == job.ReturnContext.FollowSchedule,
             npc_tile = npc is null ? null : new { x = (int)npc.Tile.X, y = (int)npc.Tile.Y },
             message = job.LastMessage
         });

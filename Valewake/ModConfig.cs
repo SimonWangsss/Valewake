@@ -1,4 +1,5 @@
 using System;
+using StardewModdingAPI;
 
 namespace Valewake;
 
@@ -34,6 +35,7 @@ public sealed class ModConfig
     public bool EnableActionAgent { get; set; } = true;
     public bool EnableWaterCropsAction { get; set; } = true;
     public bool EnableClearWeedsAction { get; set; } = true;
+    public bool EnableChopTreesAction { get; set; } = true;
     public bool EnableCrossMapDispatch { get; set; } = true;
     public int CrossMapDispatchWaitSeconds { get; set; } = 60;
     public int CrossMapFarmLeadSeconds { get; set; } = 8;
@@ -42,6 +44,26 @@ public sealed class ModConfig
     public double MinimumActionConfidence { get; set; } = 0.65;
     public int MaxWaterTilesPerJob { get; set; } = 10;
     public int MaxWeedsPerJob { get; set; } = 10;
+    public int MaxTreesPerJob { get; set; } = 3;
     public int ActionTargetRadiusTiles { get; set; } = 12;
     public int ActionPathTimeoutTicks { get; set; } = 600;
+    public bool EnableOffscreenFarmWork { get; set; } = true;
+    public int OffscreenWorkIntervalSeconds { get; set; } = 2;
+    public bool EnableMineExpeditions { get; set; } = true;
+    public int MinimumExpeditionHearts { get; set; } = 4;
+    public bool ExpeditionAutoMineOnJoin { get; set; } = true;
+    public bool ExpeditionAutoDefendOnJoin { get; set; } = true;
+    public int ExpeditionFollowDistanceTiles { get; set; } = 2;
+    public int ExpeditionFollowSpeedBoost { get; set; } = 2;
+    public int ExpeditionRepathIntervalTicks { get; set; } = 45;
+    public int ExpeditionStallRecoveryTicks { get; set; } = 120;
+    public int ExpeditionOffscreenCatchUpTicks { get; set; } = 240;
+    public int ExpeditionWarpDelayTicks { get; set; } = 75;
+    public int ExpeditionDefenseRadiusTiles { get; set; } = 6;
+    public int ExpeditionMiningRadiusTiles { get; set; } = 8;
+    public int ExpeditionMaxMineTargets { get; set; } = 10;
+    public int ExpeditionAttackDamage { get; set; } = 12;
+    public int ExpeditionEndTime { get; set; } = 2300;
+    public int ExpeditionTargetSnapRadiusTiles { get; set; } = 1;
+    public SButton ExpeditionTargetButton { get; set; } = SButton.G;
 }

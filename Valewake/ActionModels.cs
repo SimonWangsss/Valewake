@@ -8,6 +8,15 @@ public static class ActionIds
 {
     public const string WaterCrops = "water_crops";
     public const string ClearWeeds = "clear_weeds";
+    public const string ChopTrees = "chop_trees";
+    public const string JoinMineExpedition = "join_mine_expedition";
+    public const string DefendPlayer = "defend_player";
+    public const string MineTarget = "mine_target";
+    public const string MineNearby = "mine_nearby";
+    public const string MineExpedition = "mine_expedition";
+
+    public static bool IsMineAction(string action) => action is
+        JoinMineExpedition or DefendPlayer or MineTarget or MineNearby or MineExpedition;
 }
 
 public static class ActionJobStates
@@ -17,6 +26,7 @@ public static class ActionJobStates
     public const string Preparing = "preparing";
     public const string Navigating = "navigating";
     public const string Acting = "acting";
+    public const string BackgroundWorking = "background_working";
     public const string Returning = "returning";
     public const string Completed = "completed";
     public const string Cancelled = "cancelled";
@@ -43,6 +53,7 @@ public sealed class ActionJobSaveData
 public sealed class ActionJob
 {
     public string JobId { get; set; } = "";
+    public string SourceTurnId { get; set; } = "";
     public string ProposalId { get; set; } = "";
     public string SaveId { get; set; } = "";
     public string NpcName { get; set; } = "";
@@ -58,6 +69,9 @@ public sealed class ActionJob
     public int CompletedTargets { get; set; }
     public int FailedTargets { get; set; }
     public string LastMessage { get; set; } = "";
+    public string LastTargetType { get; set; } = "";
+    public string LastTargetQualifiedId { get; set; } = "";
+    public bool LastTargetAllowed { get; set; }
     public ActionReturnContext ReturnContext { get; set; } = new();
 
     [JsonIgnore]
@@ -95,6 +109,12 @@ public sealed class ActionJob
 
     [JsonIgnore]
     public long RuntimeActionStartedTick { get; set; }
+
+    [JsonIgnore]
+    public long RuntimeBackgroundNextTick { get; set; }
+
+    [JsonIgnore]
+    public int RuntimeTargetStrikes { get; set; }
 }
 
 public sealed class ActionTile

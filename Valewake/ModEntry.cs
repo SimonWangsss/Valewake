@@ -20,6 +20,7 @@ public sealed class ModEntry : Mod
     private BackendProcessManager? backendProcessManager;
     private RelationshipManager? relationshipManager;
     private ActionJobManager? actionJobManager;
+    private MineExpeditionManager? mineExpeditionManager;
     private readonly ConcurrentQueue<Action> mainThreadActions = new();
     private readonly List<AgentConversationMessage> conversationHistory = new();
     private Task memorySessionReady = Task.CompletedTask;
@@ -28,6 +29,7 @@ public sealed class ModEntry : Mod
     private bool pendingVanillaDialogueSeen;
     private int pendingVanillaStartedTick;
     private string pendingVanillaLine = "";
+    private string lastTurnId = "";
 
     public override void Entry(IModHelper helper)
     {
@@ -44,6 +46,7 @@ public sealed class ModEntry : Mod
         backendProcessManager = new BackendProcessManager(Monitor, Config, helper.DirectoryPath);
         relationshipManager = new RelationshipManager(helper, Monitor, Config);
         actionJobManager = new ActionJobManager(helper, Monitor, Config);
+        mineExpeditionManager = new MineExpeditionManager(helper, Monitor, Config);
 
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
@@ -93,6 +96,30 @@ public sealed class ModEntry : Mod
             }
         );
 
+        helper.ConsoleCommands.Add(
+            "agent_mark",
+            "Annotate the latest AI turn. Usage: agent_mark <keep|reject|boundary|memory_good|memory_bad|action_good|action_bad> [note]",
+            OnMarkCommand
+        );
+
+        helper.ConsoleCommands.Add(
+            "agent_expedition",
+            "Show the active Valewake mine expedition.",
+            (_, _) => Monitor.Log(mineExpeditionManager?.GetSummary() ?? "Mine Expedition Manager is unavailable.", LogLevel.Info)
+        );
+
+        helper.ConsoleCommands.Add(
+            "agent_end_expedition",
+            "End the active expedition; the NPC leaves after exiting a mine level.",
+            (_, _) => mineExpeditionManager?.BeginReturn("The player ended the expedition.")
+        );
+
+        helper.ConsoleCommands.Add(
+            "agent_mine_target",
+            "Set the active companion's priority mine target to the tile under the cursor.",
+            (_, _) => SetExpeditionTarget(Helper.Input.GetCursorPosition().GrabTile)
+        );
+
         Monitor.Log(
             "Valewake loaded. Use '" + Config.StateCommandName +
             "' for state or '" + Config.ChatCommandName +
@@ -121,9 +148,11 @@ public sealed class ModEntry : Mod
 
     private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
     {
-        memorySessionReady = RollbackCurrentSaveMemoryAsync();
+        lastTurnId = "";
+        memorySessionReady = RollbackCurrentSaveMemoryAsync("save_loaded_rollback");
         relationshipManager?.Load();
         actionJobManager?.Load();
+        mineExpeditionManager?.Load();
         Monitor.Log($"Save loaded for {Game1.player.Name} on {Game1.player.farmName.Value} Farm.", LogLevel.Info);
         LogSnapshot("Initial save snapshot");
     }
@@ -153,6 +182,7 @@ public sealed class ModEntry : Mod
         }
 
         actionJobManager?.Update();
+        mineExpeditionManager?.Update();
 
         if (pendingVanillaNpc is not null &&
             !pendingVanillaDialogueSeen &&
@@ -188,14 +218,21 @@ public sealed class ModEntry : Mod
     {
         string saveFolder = Constants.SaveFolderName ?? "";
         if (!string.IsNullOrWhiteSpace(saveFolder))
-            _ = RollbackMemoryAsync($"{saveFolder}:");
+            _ = RollbackMemoryAsync($"{saveFolder}:", "save_rolled_back");
         EndChatSession();
+        lastTurnId = "";
         ClearPendingVanillaDialogue();
         Monitor.Log("Returned to title screen.", LogLevel.Trace);
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
     {
+        if (Context.IsWorldReady && e.Button == Config.ExpeditionTargetButton && mineExpeditionManager?.HasActiveExpedition == true)
+        {
+            SetExpeditionTarget(e.Cursor.GrabTile);
+            Helper.Input.Suppress(e.Button);
+            return;
+        }
         if (!Config.EnableRightClickChat || !Context.IsWorldReady || !e.Button.IsActionButton())
             return;
         if (Game1.activeClickableMenu is not null || !Context.IsPlayerFree)
@@ -277,6 +314,28 @@ public sealed class ModEntry : Mod
 
         Game1.activeClickableMenu = new NpcThinkingMenu(npc);
         _ = SendChatToBackendAsync(playerInput, npc, Array.Empty<AgentConversationMessage>(), continueConversation: false);
+    }
+
+    private void OnMarkCommand(string command, string[] args)
+    {
+        string[] allowed =
+        {
+            "keep", "reject", "boundary", "memory_good", "memory_bad", "action_good", "action_bad"
+        };
+        if (args.Length == 0 || !allowed.Contains(args[0], StringComparer.OrdinalIgnoreCase))
+        {
+            Monitor.Log("Usage: agent_mark <keep|reject|boundary|memory_good|memory_bad|action_good|action_bad> [note]", LogLevel.Info);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(lastTurnId))
+        {
+            Monitor.Log("No AI turn has been shown in this game session yet.", LogLevel.Warn);
+            return;
+        }
+
+        string label = args[0].ToLowerInvariant();
+        string note = string.Join(" ", args.Skip(1)).Trim();
+        _ = MarkLatestTurnAsync(lastTurnId, label, note);
     }
 
     private void LogSnapshot(string label, LogLevel level = LogLevel.Info)
@@ -371,16 +430,45 @@ public sealed class ModEntry : Mod
             {
                 if (!Context.IsWorldReady)
                     return;
+                lastTurnId = response.TurnId;
                 NPC currentNpc = Game1.getCharacterFromName(npc.Name) ?? npc;
                 RelationshipApplicationResult? relationshipResult = relationshipManager?.Apply(
                     currentNpc,
                     response.RelationshipEffect
                 );
+                if (relationshipResult is not null)
+                {
+                    _ = SendTraceEventSafeAsync("relationship_applied", new
+                    {
+                        turn_id = response.TurnId,
+                        npc_name = currentNpc.Name,
+                        was_applied = relationshipResult.WasApplied,
+                        friendship_points = relationshipResult.FriendshipPoints,
+                        reason = relationshipResult.Reason
+                    });
+                }
                 if (continueConversation && IsActiveChatNpc(currentNpc))
                     AddConversationMessage("assistant", response.Reply);
 
                 ActionProposalDecision? actionDecision = null;
-                if (response.ActionProposal is not null && actionJobManager is not null)
+                bool isMineAction = response.ActionProposal is not null && ActionIds.IsMineAction(response.ActionProposal.Action);
+                if (response.ActionProposal is not null && isMineAction && mineExpeditionManager is not null)
+                {
+                    actionDecision = mineExpeditionManager.Evaluate(
+                        response.ActionProposal,
+                        currentNpc,
+                        playerInput,
+                        relationshipManager?.GetContext(currentNpc.Name) ?? new AgentRelationshipContext(),
+                        actionJobManager?.HasActiveJob(currentNpc.Name) == true
+                    );
+                    mineExpeditionManager.TraceProposalDecision(
+                        response.ActionProposal,
+                        currentNpc,
+                        actionDecision,
+                        response.TurnId
+                    );
+                }
+                else if (response.ActionProposal is not null && actionJobManager is not null)
                 {
                     actionDecision = actionJobManager.Evaluate(
                         response.ActionProposal,
@@ -391,7 +479,8 @@ public sealed class ModEntry : Mod
                     actionJobManager.TraceProposalDecision(
                         response.ActionProposal,
                         currentNpc,
-                        actionDecision
+                        actionDecision,
+                        response.TurnId
                     );
                     Monitor.Log(
                         actionDecision.Allowed
@@ -412,7 +501,8 @@ public sealed class ModEntry : Mod
                         currentNpc,
                         proposal,
                         decision,
-                        continueConversation
+                        continueConversation,
+                        response.TurnId
                     );
                 }
                 ShowNpcDialogue(
@@ -454,15 +544,18 @@ public sealed class ModEntry : Mod
             await CommitMemoryAsync($"{saveFolder}:");
     }
 
-    private async Task RollbackCurrentSaveMemoryAsync()
+    private async Task RollbackCurrentSaveMemoryAsync(string eventName)
     {
         string saveFolder = Constants.SaveFolderName ?? "";
         if (!string.IsNullOrWhiteSpace(saveFolder))
-            await RollbackMemoryAsync($"{saveFolder}:");
+            await RollbackMemoryAsync($"{saveFolder}:", eventName);
     }
 
     private async Task CommitMemoryAsync(string sessionPrefix)
     {
+        string saveId = Constants.SaveFolderName ?? "";
+        int gameDay = Context.IsWorldReady ? Game1.Date.TotalDays : -1;
+        int timeOfDay = Context.IsWorldReady ? Game1.timeOfDay : -1;
         try
         {
             if (backendClient is null ||
@@ -471,6 +564,13 @@ public sealed class ModEntry : Mod
                 return;
             }
             await backendClient.CommitMemoryAsync(sessionPrefix);
+            await backendClient.SendTraceEventAsync("save_committed", new
+            {
+                session_prefix = sessionPrefix,
+                save_id = saveId,
+                game_day = gameDay,
+                time_of_day = timeOfDay
+            });
             Monitor.Log($"Committed AI memory for {sessionPrefix}", LogLevel.Trace);
         }
         catch (Exception ex)
@@ -479,8 +579,11 @@ public sealed class ModEntry : Mod
         }
     }
 
-    private async Task RollbackMemoryAsync(string sessionPrefix)
+    private async Task RollbackMemoryAsync(string sessionPrefix, string eventName)
     {
+        string saveId = Constants.SaveFolderName ?? "";
+        int gameDay = Context.IsWorldReady ? Game1.Date.TotalDays : -1;
+        int timeOfDay = Context.IsWorldReady ? Game1.timeOfDay : -1;
         try
         {
             if (backendClient is null ||
@@ -489,6 +592,13 @@ public sealed class ModEntry : Mod
                 return;
             }
             await backendClient.RollbackMemoryAsync(sessionPrefix);
+            await backendClient.SendTraceEventAsync(eventName, new
+            {
+                session_prefix = sessionPrefix,
+                save_id = saveId,
+                game_day = gameDay,
+                time_of_day = timeOfDay
+            });
             Monitor.Log($"Rolled AI memory back to the last game save for {sessionPrefix}", LogLevel.Trace);
         }
         catch (Exception ex)
@@ -501,9 +611,11 @@ public sealed class ModEntry : Mod
         NPC npc,
         AgentActionProposal proposal,
         ActionProposalDecision decision,
-        bool continueConversation)
+        bool continueConversation,
+        string sourceTurnId)
     {
-        if (!Context.IsWorldReady || actionJobManager is null)
+        bool isMineAction = ActionIds.IsMineAction(proposal.Action);
+        if (!Context.IsWorldReady || (isMineAction ? mineExpeditionManager is null : actionJobManager is null))
             return;
 
         Game1.currentLocation.createQuestionDialogue(
@@ -512,13 +624,29 @@ public sealed class ModEntry : Mod
             (_, answer) =>
             {
                 bool confirmed = string.Equals(answer, "Yes", StringComparison.OrdinalIgnoreCase);
-                actionJobManager.TraceConfirmation(proposal, npc, confirmed);
+                if (isMineAction)
+                    mineExpeditionManager!.TraceConfirmation(proposal, npc, confirmed, sourceTurnId);
+                else
+                    actionJobManager!.TraceConfirmation(proposal, npc, confirmed, sourceTurnId);
                 if (confirmed)
                 {
-                    ActionJob job = actionJobManager.Accept(proposal, npc, decision);
-                    Game1.addHUDMessage(new HUDMessage(
-                        $"{npc.displayName} accepted the job ({job.MaxTargets} max)."
-                    ));
+                    if (isMineAction)
+                    {
+                        bool upgraded = mineExpeditionManager!.HasActiveExpedition;
+                        MineExpedition expedition = mineExpeditionManager!.Accept(proposal, npc, decision, sourceTurnId);
+                        Game1.addHUDMessage(new HUDMessage(
+                            upgraded
+                                ? $"已为 {npc.displayName} 的同行任务追加能力：{proposal.Action}。"
+                                : $"{npc.displayName} 已加入矿洞同行，将自动跟随、挖矿并防御。按 {Config.ExpeditionTargetButton} 可优先指定矿石。"
+                        ));
+                    }
+                    else
+                    {
+                        ActionJob job = actionJobManager!.Accept(proposal, npc, decision, sourceTurnId);
+                        Game1.addHUDMessage(new HUDMessage(
+                            $"{npc.displayName} accepted the job ({job.MaxTargets} max)."
+                        ));
+                    }
                     EndChatSession();
                     return;
                 }
@@ -528,6 +656,46 @@ public sealed class ModEntry : Mod
             },
             npc
         );
+    }
+
+    private void SetExpeditionTarget(Vector2 tile)
+    {
+        ExpeditionTargetResult result = mineExpeditionManager?.SetPriorityTarget(tile)
+            ?? new ExpeditionTargetResult { Message = "矿洞同行控制器不可用。" };
+        if (Context.IsWorldReady)
+            Game1.addHUDMessage(new HUDMessage(result.Message));
+        Monitor.Log(result.Message, result.Accepted ? LogLevel.Info : LogLevel.Warn);
+    }
+
+    private async Task MarkLatestTurnAsync(string turnId, string label, string note)
+    {
+        try
+        {
+            if (backendClient is null ||
+                (backendProcessManager is not null && !await backendProcessManager.EnsureReadyAsync()))
+                return;
+            await backendClient.MarkTurnAsync(turnId, label, note);
+            Monitor.Log($"Marked {turnId} as {label}{(string.IsNullOrWhiteSpace(note) ? "" : $": {note}")}", LogLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Could not annotate AI turn: {ex.Message}", LogLevel.Warn);
+        }
+    }
+
+    private async Task SendTraceEventSafeAsync(string eventName, object payload)
+    {
+        try
+        {
+            if (backendClient is null ||
+                (backendProcessManager is not null && !await backendProcessManager.EnsureReadyAsync()))
+                return;
+            await backendClient.SendTraceEventAsync(eventName, payload);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Could not append trace event '{eventName}': {ex.Message}", LogLevel.Warn);
+        }
     }
 
     private void BeginChatSession(NPC npc, string vanillaOpeningLine)

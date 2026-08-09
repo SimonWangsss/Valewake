@@ -18,6 +18,8 @@ public sealed class AgentBackendClient : IDisposable
     private readonly Uri endpoint;
     private readonly Uri memoryCommitEndpoint;
     private readonly Uri memoryRollbackEndpoint;
+    private readonly Uri traceEventEndpoint;
+    private readonly Uri traceMarkEndpoint;
 
     public AgentBackendClient(string backendUrl, int timeoutSeconds)
     {
@@ -25,6 +27,8 @@ public sealed class AgentBackendClient : IDisposable
         Uri serviceRoot = new(endpoint, "/");
         memoryCommitEndpoint = new Uri(serviceRoot, "memory/commit");
         memoryRollbackEndpoint = new Uri(serviceRoot, "memory/rollback");
+        traceEventEndpoint = new Uri(serviceRoot, "trace/event");
+        traceMarkEndpoint = new Uri(serviceRoot, "trace/mark");
         httpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(Math.Max(5, timeoutSeconds))
@@ -58,6 +62,23 @@ public sealed class AgentBackendClient : IDisposable
     public Task RollbackMemoryAsync(string sessionPrefix, CancellationToken cancellationToken = default) =>
         SendMemoryOperationAsync(memoryRollbackEndpoint, sessionPrefix, cancellationToken);
 
+    public Task SendTraceEventAsync(
+        string eventName,
+        object payload,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync(traceEventEndpoint, new { @event = eventName, payload }, cancellationToken);
+
+    public Task MarkTurnAsync(
+        string turnId,
+        string label,
+        string note,
+        CancellationToken cancellationToken = default) =>
+        SendJsonAsync(
+            traceMarkEndpoint,
+            new { turn_id = turnId, label, note, tags = Array.Empty<string>() },
+            cancellationToken
+        );
+
     private async Task SendMemoryOperationAsync(
         Uri operationEndpoint,
         string sessionPrefix,
@@ -78,6 +99,24 @@ public sealed class AgentBackendClient : IDisposable
         {
             throw new InvalidOperationException(
                 $"Backend memory operation returned {(int)response.StatusCode}: {responseText}"
+            );
+        }
+    }
+
+    private async Task SendJsonAsync(
+        Uri target,
+        object payload,
+        CancellationToken cancellationToken)
+    {
+        string json = JsonSerializer.Serialize(payload, JsonOptions);
+        using StringContent content = new(json, Encoding.UTF8, "application/json");
+        using HttpResponseMessage response = await httpClient.PostAsync(target, content, cancellationToken);
+        string responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode ||
+            responseText.Contains("\"ok\":false", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Backend trace operation returned {(int)response.StatusCode}: {responseText}"
             );
         }
     }
