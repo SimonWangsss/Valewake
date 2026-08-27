@@ -190,3 +190,99 @@ def relationship_from_state(game_state: Dict[str, Any]) -> Dict[str, Any]:
         "hearts": player.get("hearts", 0),
         "status": player.get("relationshipStatus", player.get("relationship_status", "acquaintance")),
     }
+
+
+def relationship_voice(relationship: Dict[str, Any]) -> Dict[str, str]:
+    try:
+        hearts = max(0, int(relationship.get("hearts", 0) or 0))
+    except (TypeError, ValueError):
+        hearts = 0
+    status = str(relationship.get("status", "acquaintance") or "acquaintance").lower()
+    if status == "divorced":
+        stage = "guarded_after_breakup"
+        guidance = "Be guarded and concise; warmth must be earned again."
+    elif status in {"married", "engaged"}:
+        stage = "committed_partner"
+        guidance = "Use natural domestic warmth and trust, with affection that still fits the NPC's personality."
+    elif status in {"dating", "boyfriend", "girlfriend"}:
+        stage = "romantic_partner"
+        guidance = "Allow understated romantic warmth and personal familiarity without becoming clingy or generic."
+    elif hearts >= 8:
+        stage = "very_close"
+        guidance = "Speak with strong trust and personal familiarity, but keep romance platonic unless the status supports it."
+    elif hearts >= 6:
+        stage = "close_friend"
+        guidance = "Be noticeably warmer, more candid, and willing to reference shared history."
+    elif hearts >= 4:
+        stage = "friend"
+        guidance = "Be friendly and relaxed, while preserving the NPC's normal reserve or sharp edges."
+    elif hearts >= 2:
+        stage = "familiar"
+        guidance = "Show recognition and modest familiarity, but avoid intimate language or unconditional trust."
+    else:
+        stage = "acquaintance"
+        guidance = "Remain polite or characteristically reserved; avoid pet names, intimacy, and instant trust."
+    return {"stage": stage, "guidance": guidance}
+
+
+def player_knowledge_context(
+    player_input: str,
+    retrieved_memory: list[str],
+    relationship: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized = normalize_policy_text(player_input)
+    personal_question_markers = (
+        "what do i like", "what is my favorite", "guess what i like",
+        "do you know what i like", "what kind of movie do i like",
+        "你觉得我喜欢", "你猜我喜欢", "你知道我喜欢", "我喜欢什么",
+        "我最喜欢什么", "我的最爱是什么",
+    )
+    asks_private_preference = any(marker in normalized for marker in personal_question_markers)
+    if not asks_private_preference:
+        return {
+            "asks_private_player_fact": False,
+            "grounded_memory_available": False,
+            "response_mode": "ordinary",
+        }
+
+    topic_markers = {
+        "animals": ("animal", "pet", "cat", "dog", "动物", "宠物", "猫", "狗"),
+        "movies": ("movie", "film", "电影", "影片"),
+        "books": ("book", "novel", "read", "书", "小说", "阅读"),
+        "music": ("music", "song", "band", "音乐", "歌", "乐队"),
+        "food": ("food", "dish", "meal", "吃", "食物", "菜"),
+        "games": ("game", "游戏"),
+    }
+    query_topics = {
+        topic for topic, markers in topic_markers.items()
+        if any(marker in normalized for marker in markers)
+    }
+    grounded = any(
+        not query_topics or any(
+            any(marker in normalize_policy_text(memory) for marker in topic_markers[topic])
+            for topic in query_topics
+        )
+        for memory in retrieved_memory
+    )
+    explicitly_invites_guess = any(marker in normalized for marker in (
+        "guess", "你猜", "你觉得",
+    ))
+    broad_low_stakes_topic = "animals" in query_topics
+    if grounded:
+        mode = "answer_from_retrieved_memory"
+    elif explicitly_invites_guess and broad_low_stakes_topic:
+        mode = "one_tentative_guess_then_ask"
+    else:
+        mode = "admit_unknown_then_ask"
+    return {
+        "asks_private_player_fact": True,
+        "grounded_memory_available": grounded,
+        "response_mode": mode,
+        "relationship_stage": relationship_voice(relationship)["stage"],
+        "queried_topics": sorted(query_topics),
+        "constraints": [
+            "Never present an unknown player preference as remembered or established fact.",
+            "A permitted guess must be explicitly tentative and must not invent evidence or shared history.",
+            "Do not name a specific movie, book, song, person, place, or past event without grounded memory.",
+        ],
+    }

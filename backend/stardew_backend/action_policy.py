@@ -7,6 +7,82 @@ SUPPORTED_ACTIONS = {
     "mine_target", "mine_nearby", "mine_expedition",
 }
 
+FARM_ACTIONS = {"water_crops", "clear_weeds", "chop_trees"}
+MINE_ACTIONS = SUPPORTED_ACTIONS - FARM_ACTIONS
+
+
+def action_eligibility(action: str, game_state: dict[str, Any]) -> dict[str, Any]:
+    """Mirror the deterministic SMAPI gates that are knowable before generation."""
+    if not action:
+        return {"requested_action": "", "eligible": False, "reason_code": "no_action"}
+
+    rules = game_state.get("action_rules") or {}
+    snapshot = game_state.get("npc_perception") or game_state.get("snapshot") or {}
+    player = snapshot.get("player") or {}
+    relationship = game_state.get("agent_relationship") or {}
+    try:
+        hearts = int(player.get("hearts", 0) or 0)
+    except (TypeError, ValueError):
+        hearts = 0
+    try:
+        trust = int(rules.get("current_trust", relationship.get("trust", 0)) or 0)
+    except (TypeError, ValueError):
+        trust = 0
+
+    is_mine = action in MINE_ACTIONS
+    minimum_hearts = int(rules.get(
+        "minimum_expedition_hearts" if is_mine else "minimum_farm_hearts",
+        4 if is_mine else 2,
+    ) or 0)
+    minimum_trust = int(rules.get("minimum_trust", 0) or 0)
+    current_time = int(rules.get("current_time", 0) or 0)
+    end_time = int(rules.get(
+        "expedition_end_time" if is_mine else "farm_end_time",
+        2300 if is_mine else 2200,
+    ) or 0)
+
+    enabled_key = f"{action}_enabled"
+    action_enabled = rules.get(enabled_key, True)
+    if is_mine:
+        action_enabled = bool(rules.get("mine_expeditions_enabled", True))
+
+    reason_code = ""
+    if not bool(rules.get("enabled", True)) or not action_enabled:
+        reason_code = "action_disabled"
+    elif not bool(rules.get("is_host", True)):
+        reason_code = "host_only"
+    elif bool(rules.get("event_active", False)):
+        reason_code = "event_active"
+    elif bool(rules.get("npc_is_child", False)):
+        reason_code = "child_npc"
+    elif current_time >= end_time:
+        reason_code = "too_late"
+    elif hearts < minimum_hearts:
+        reason_code = "insufficient_hearts"
+    elif trust < minimum_trust:
+        reason_code = "insufficient_trust"
+
+    return {
+        "requested_action": action,
+        "eligible": not reason_code,
+        "reason_code": reason_code,
+        "current_hearts": hearts,
+        "minimum_hearts": minimum_hearts,
+        "current_trust": trust,
+        "minimum_trust": minimum_trust,
+        "request_attempt_limit": max(1, int(rules.get("request_attempt_limit", 3) or 3)),
+    }
+
+
+def forced_action_proposal(action: str, player_input: str, disposition: str, reason: str) -> dict[str, Any]:
+    return normalize_action_proposal({
+        "action": action,
+        "disposition": disposition,
+        "confidence": 0.95,
+        "reason": reason,
+        "evidence": player_input,
+    }, player_input) or {}
+
 ACTION_ALIASES = {
     "water": "water_crops",
     "water_crop": "water_crops",

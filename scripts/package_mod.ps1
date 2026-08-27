@@ -24,6 +24,9 @@ finally {
 New-Item -ItemType Directory -Path $bundle -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $backend "dist\ValewakeBackend.exe") -Destination $bundle -Force
 Copy-Item -LiteralPath (Join-Path $backend ".env.example") -Destination $bundle -Force
+$providersBundle = Join-Path $bundle "providers"
+New-Item -ItemType Directory -Path $providersBundle -Force | Out-Null
+Copy-Item -Path (Join-Path $backend "providers\*") -Destination $providersBundle -Force
 $personasBundle = Join-Path $bundle "data\personas"
 $ragBundle = Join-Path $bundle "data\rag"
 New-Item -ItemType Directory -Path $personasBundle -Force | Out-Null

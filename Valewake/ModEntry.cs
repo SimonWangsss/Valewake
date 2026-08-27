@@ -377,6 +377,8 @@ public sealed class ModEntry : Mod
         await memorySessionReady;
 
         NpcPerceptionSnapshot npcPerception = NpcPerceptionSnapshot.FromGame(npc);
+        AgentRelationshipContext agentRelationship =
+            relationshipManager?.GetContext(npc.Name) ?? new AgentRelationshipContext();
         var gameState = new
         {
             source = "stardew_valley_smapi",
@@ -401,7 +403,26 @@ public sealed class ModEntry : Mod
                 name = Game1.player.Name
             },
             npc_perception = npcPerception,
-            agent_relationship = relationshipManager?.GetContext(npc.Name) ?? new AgentRelationshipContext()
+            agent_relationship = agentRelationship,
+            action_rules = new
+            {
+                enabled = Config.EnableActionAgent,
+                water_crops_enabled = Config.EnableWaterCropsAction,
+                clear_weeds_enabled = Config.EnableClearWeedsAction,
+                chop_trees_enabled = Config.EnableChopTreesAction,
+                mine_expeditions_enabled = Config.EnableMineExpeditions,
+                minimum_farm_hearts = Config.MinimumActionHearts,
+                minimum_expedition_hearts = Config.MinimumExpeditionHearts,
+                minimum_trust = Config.MinimumActionTrust,
+                current_trust = agentRelationship.Trust,
+                request_attempt_limit = Math.Max(1, Config.ActionRequestAttemptLimit),
+                current_time = Game1.timeOfDay,
+                farm_end_time = 2200,
+                expedition_end_time = Config.ExpeditionEndTime,
+                is_host = Context.IsMainPlayer,
+                event_active = Game1.eventUp || Game1.currentLocation?.currentEvent is not null || Game1.isFestival(),
+                npc_is_child = npc.Age == 2
+            }
         };
 
         AgentChatRequest request = new()

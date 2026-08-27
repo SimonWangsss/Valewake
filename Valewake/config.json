@@ -35,6 +35,7 @@
   "MinimumActionHearts": 2,
   "MinimumActionTrust": 0,
   "MinimumActionConfidence": 0.65,
+  "ActionRequestAttemptLimit": 3,
   "MaxWaterTilesPerJob": 10,
   "MaxWeedsPerJob": 10,
   "MaxTreesPerJob": 3,

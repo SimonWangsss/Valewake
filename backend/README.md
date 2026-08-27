@@ -1,5 +1,20 @@
 # Valewake Backend
 
+## Model providers
+
+Valewake uses an OpenAI-compatible `chat/completions` boundary. Ready-to-edit
+profiles are in `providers/` for direct DeepSeek, Alibaba Cloud Model Studio
+(Qwen), Gemini's OpenAI-compatible endpoint, and OpenRouter. Copy the selected
+profile values into `.env`, replace only `LLM_API_KEY`, and restart the backend.
+
+For real-time NPC dialogue, keep `LLM_THINKING_MODE=disabled`. DeepSeek enables
+thinking by default unless this is sent explicitly. `LLM_JSON_MODE=true` requests
+the structured response used by the dialogue parser; set it to `false` only when
+the chosen provider/model rejects `response_format`.
+
+Every real call now records latency and token usage in `agent_trace.jsonl` under
+`llm_metrics`, without recording the API key.
+
 Independent FastAPI backend for `Valewake`.
 
 It is intentionally separate from the earlier Unity/Yu Gong prototype. It has its own package, memory file, RAG folder, and prompts.

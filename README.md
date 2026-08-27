@@ -73,6 +73,10 @@ Current backend features:
 - typed watering/weeding proposals with deterministic normalization and evidence grounding
 - typed mine-expedition proposals with a deterministic local controller
 - same-language validation with a bounded Chinese correction retry
+- relationship-stage voice guidance layered under each NPC's own persona
+- action eligibility shared with SMAPI and a third-eligible-request acceptance cap
+- per-attempt LLM latency/token Trace with explicit DeepSeek thinking control
+- provider profiles for DeepSeek, Qwen, Gemini, and OpenRouter
 
 ## Build
 
@@ -124,6 +128,10 @@ Can you chop a few mature trees on my farm?
 The NPC may accept, refuse, or negotiate in character. An accepted proposal
 still requires local validation and a Yes/No confirmation. Use `agent_jobs` to
 inspect the active queue or `agent_cancel_jobs` to cancel and restore schedules.
+Only eligible refusals count toward `ActionRequestAttemptLimit` (default `3`), so
+the third same-action request on the same game day is accepted. Hard gates such
+as heart level, trust, age, time, events, host authority, and disabled actions
+can never be bypassed by repeating the request.
 See `docs/action_agent_v1_test_plan.md` for the complete manual test matrix.
 
 To test mine companionship, ask an adult NPC with at least four hearts:

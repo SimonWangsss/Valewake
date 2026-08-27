@@ -27,6 +27,9 @@ class Settings:
     top_k_rag: int
     top_k_memory: int
     max_episodes_per_session: int
+    llm_thinking_mode: str = "disabled"
+    llm_max_tokens: int = 700
+    llm_json_mode: bool = True
     persona_path: Path = Path("./data/personas/stardew_npcs.json")
 
     @classmethod
@@ -38,6 +41,9 @@ class Settings:
             llm_api_key=os.getenv("LLM_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", "qwen"),
             llm_timeout_seconds=int(os.getenv("LLM_TIMEOUT_SECONDS", "60")),
+            llm_thinking_mode=os.getenv("LLM_THINKING_MODE", "disabled").strip().lower(),
+            llm_max_tokens=int(os.getenv("LLM_MAX_TOKENS", "700")),
+            llm_json_mode=os.getenv("LLM_JSON_MODE", "true").strip().lower() in {"1", "true", "yes", "on"},
             rag_dir=Path(os.getenv("STARDEW_RAG_DIR", "./data/rag/stardew")),
             memory_path=Path(os.getenv("STARDEW_MEMORY_PATH", "./data/memory/player_memory.json")),
             trace_path=Path(os.getenv("STARDEW_TRACE_PATH", "./data/traces/agent_trace.jsonl")),

@@ -1,4 +1,5 @@
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -12,15 +13,24 @@ class LLMConfig:
     api_key: str
     model: str
     timeout_seconds: int
+    thinking_mode: str = "disabled"
+    max_tokens: int = 700
+    json_mode: bool = True
 
 
 class LLMClient:
     def __init__(self, config: LLMConfig):
         self.config = config
+        self.last_metrics: dict[str, object] = {}
 
     def chat(self, messages: List[Dict[str, str]], temperature: float = 0.45) -> str:
         if self.config.backend == "mock":
-            return self._mock_reply(messages)
+            started = time.perf_counter()
+            result = self._mock_reply(messages)
+            self.last_metrics = {
+                "provider": "mock", "latency_ms": round((time.perf_counter() - started) * 1000, 1)
+            }
+            return result
         if self.config.backend == "openai":
             return self._openai_chat(messages, temperature)
         raise ValueError(f"Unsupported LLM_BACKEND: {self.config.backend}")
@@ -30,10 +40,13 @@ class LLMClient:
             "model": self.config.model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": 900,
+            "max_tokens": self.config.max_tokens,
         }
-        if "api.deepseek.com" in self.config.api_base.lower():
+        is_deepseek = "api.deepseek.com" in self.config.api_base.lower()
+        if self.config.json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if is_deepseek and self.config.thinking_mode in {"enabled", "disabled", "auto"}:
+            payload["thinking"] = {"type": self.config.thinking_mode}
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = f"Bearer {self.config.api_key}"
@@ -44,6 +57,7 @@ class LLMClient:
             headers=headers,
             method="POST",
         )
+        started = time.perf_counter()
         try:
             with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
@@ -51,7 +65,21 @@ class LLMClient:
             body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"LLM HTTP {exc.code}: {body}") from exc
 
-        return data["choices"][0]["message"]["content"].strip()
+        usage = data.get("usage") or {}
+        message = data["choices"][0]["message"]
+        self.last_metrics = {
+            "provider": "deepseek" if is_deepseek else "openai_compatible",
+            "model": self.config.model,
+            "thinking_mode": self.config.thinking_mode if is_deepseek else "provider_default",
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "completion_tokens": usage.get("completion_tokens"),
+            "total_tokens": usage.get("total_tokens"),
+        }
+        reasoning = message.get("reasoning_content")
+        if reasoning:
+            self.last_metrics["reasoning_chars"] = len(reasoning)
+        return str(message.get("content") or "").strip()
 
     def _mock_reply(self, messages: List[Dict[str, str]]) -> str:
         user_text = messages[-1]["content"] if messages else ""

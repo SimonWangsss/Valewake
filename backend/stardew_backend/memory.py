@@ -354,9 +354,12 @@ class MemoryStore:
         emotion: str,
         game_day: int | None,
         policy: dict[str, Any],
+        action_context: dict[str, Any] | None = None,
+        action_disposition: str = "",
     ) -> str:
         episode_id = uuid4().hex
         with self._lock:
+            action_context = action_context or {}
             self.data["episodes"].append({
                 "id": episode_id,
                 "session_id": session_id,
@@ -365,6 +368,10 @@ class MemoryStore:
                 "emotion": emotion,
                 "game_day": game_day,
                 "policy_stance": policy.get("response_stance", "respond_naturally"),
+                "requested_action": action_context.get("requested_action", ""),
+                "action_eligible": bool(action_context.get("eligible", False)),
+                "action_disposition": action_disposition,
+                "action_forced_accept": bool(action_context.get("force_accept", False)),
                 "created_at": utc_now(),
             })
             session_episodes = [
@@ -389,6 +396,29 @@ class MemoryStore:
             }
             self.save()
         return episode_id
+
+    def consecutive_action_refusals(
+        self,
+        session_id: str,
+        action: str,
+        game_day: int | None,
+    ) -> int:
+        count = 0
+        for episode in reversed(self.recent_episodes(session_id, limit=30)):
+            if episode.get("requested_action") != action:
+                continue
+            if game_day is not None and episode.get("game_day") != game_day:
+                break
+            if not episode.get("action_eligible", False):
+                continue
+            disposition = str(episode.get("action_disposition", ""))
+            if disposition == "accept":
+                break
+            if disposition == "refuse":
+                count += 1
+                continue
+            break
+        return count
 
 
 def extract_memories(player_input: str) -> list[tuple[str, str, int, str]]:

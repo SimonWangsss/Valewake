@@ -436,7 +436,18 @@ public sealed class MineExpeditionManager
         npc.faceGeneralDirection(monster.Position, 0, opposite: false, useTileCalculations: false);
         NpcToolAnimation.PlayBodySwing(npc);
         int healthBefore = monster.Health;
-        monster.takeDamage(config.ExpeditionAttackDamage, 0, 0, false, 1.0, Game1.player);
+        Game1.currentLocation.damageMonster(
+            monster.GetBoundingBox(),
+            config.ExpeditionAttackDamage,
+            config.ExpeditionAttackDamage,
+            isBomb: false,
+            knockBackModifier: 1f,
+            addedPrecision: 0,
+            critChance: 0f,
+            critMultiplier: 1f,
+            triggerMonsterInvincibleTimer: true,
+            who: Game1.player
+        );
         Game1.playSound("swordswipe");
         expedition.RuntimeNextDecisionTick = Game1.ticks + 24;
         if (healthBefore > 0 && monster.Health <= 0)
@@ -496,6 +507,8 @@ public sealed class MineExpeditionManager
         Game1.playSound("hammer");
         if (destroyed)
         {
+            // Match Pickaxe.DoFunction so mine loot and ladder checks run through vanilla logic.
+            location.OnStoneDestroyed(node.ItemId, (int)target.Value.X, (int)target.Value.Y, Game1.player);
             node.performRemoveAction();
             location.Objects.Remove(target.Value);
             expedition.CompletedTargets++;

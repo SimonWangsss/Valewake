@@ -42,6 +42,7 @@ public sealed class ModConfig
     public int MinimumActionHearts { get; set; } = 2;
     public int MinimumActionTrust { get; set; } = 0;
     public double MinimumActionConfidence { get; set; } = 0.65;
+    public int ActionRequestAttemptLimit { get; set; } = 3;
     public int MaxWaterTilesPerJob { get; set; } = 10;
     public int MaxWeedsPerJob { get; set; } = 10;
     public int MaxTreesPerJob { get; set; } = 3;
