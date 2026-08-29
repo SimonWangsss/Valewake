@@ -26,6 +26,9 @@ obj/
 *.suo
 *.log
 
+# macOS metadata
+.DS_Store
+
 # Runtime memory, traces, and generated evaluation reports
 backend/data/memory/
 backend/data/traces/
