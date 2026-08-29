@@ -140,6 +140,33 @@ the same test-set hash:
 .\.venv\Scripts\python.exe .\eval\compare_eval_reports.py <baseline.json> <candidate.json>
 ```
 
+Run the deterministic 1-30 game-day Memory Simulator without Stardew, SMAPI,
+or an API call:
+
+```powershell
+.\.venv\Scripts\python.exe .\eval\run_memory_simulator.py `
+  --output .\data\test_runs\memory_simulator_latest.json `
+  --artifacts .\data\test_runs\memory_simulator_artifacts
+```
+
+The bundled scenarios cover long-term recall, contradiction commit/rollback,
+save/NPC isolation, write filtering, episode capacity, and deduplication. Edit
+`eval/memory_scenarios.json` to add timeline steps.
+
+Score legacy and Trace v2 farm/mine logs on the Windows gameplay machine:
+
+```powershell
+.\.venv\Scripts\python.exe .\eval\score_action_traces.py `
+  --farm "<Mods\Valewake\data\traces\action_trace.jsonl>" `
+  --expedition "<Mods\Valewake\data\traces\expedition_trace.jsonl>" `
+  --output .\data\test_runs\action_trace_score_latest.json
+```
+
+Trace v2 adds baseline eligible targets, game-tick duration, path-attempt
+denominators, target pre/post state, observed world diffs, unexpected mutations,
+and a delayed NPC restoration postcheck. The scorer keeps legacy fields working
+and reports strict v2 metrics only when their required evidence is present.
+
 ## Standalone multi-NPC test window
 
 Double-click `run_valewake_test_chat.cmd` in the project root, or run:

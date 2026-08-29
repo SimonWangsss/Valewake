@@ -1,0 +1,170 @@
+[
+  {
+    "scenario_id": "preference_recall_after_30_days",
+    "category": "long_term_recall",
+    "npc": "Abigail",
+    "steps": [
+      {
+        "day": 1,
+        "op": "chat",
+        "input": "我最喜欢在雨天钓鱼。",
+        "expect": {"saved_contains": ["雨天钓鱼"]}
+      },
+      {"day": 1, "op": "commit"},
+      {
+        "day": 30,
+        "op": "search",
+        "query": "你还记得我喜欢钓鱼吗？",
+        "expect": {"retrieved_contains": ["雨天钓鱼"]}
+      }
+    ]
+  },
+  {
+    "scenario_id": "contradiction_rollback_restores_committed_fact",
+    "category": "contradiction_and_rollback",
+    "npc": "Abigail",
+    "steps": [
+      {
+        "day": 1,
+        "op": "chat",
+        "input": "我喜欢采矿。",
+        "expect": {"active_contains": ["喜欢采矿"]}
+      },
+      {"day": 1, "op": "commit"},
+      {
+        "day": 14,
+        "op": "chat",
+        "input": "我不喜欢采矿。",
+        "expect": {
+          "active_contains": ["不喜欢采矿"],
+          "superseded_contains": ["喜欢采矿"]
+        }
+      },
+      {"day": 14, "op": "rollback"},
+      {
+        "day": 15,
+        "op": "assert_memory",
+        "expect": {
+          "active_contains": ["喜欢采矿"],
+          "active_excludes": ["不喜欢采矿"],
+          "superseded_excludes": ["喜欢采矿"]
+        }
+      }
+    ]
+  },
+  {
+    "scenario_id": "contradiction_commit_keeps_latest_fact",
+    "category": "contradiction_and_rollback",
+    "npc": "Leah",
+    "steps": [
+      {"day": 2, "op": "chat", "input": "我喜欢采矿。"},
+      {"day": 2, "op": "commit"},
+      {"day": 9, "op": "chat", "input": "我不喜欢采矿。"},
+      {"day": 9, "op": "commit"},
+      {
+        "day": 10,
+        "op": "assert_memory",
+        "expect": {
+          "active_contains": ["不喜欢采矿"],
+          "active_excludes": ["玩家喜欢采矿"],
+          "superseded_contains": ["玩家喜欢采矿"]
+        }
+      }
+    ]
+  },
+  {
+    "scenario_id": "npc_and_save_session_isolation",
+    "category": "isolation",
+    "npc": "Abigail",
+    "session_id": "save_A:Abigail",
+    "steps": [
+      {
+        "day": 3,
+        "op": "chat",
+        "input": "我喜欢钓鱼。",
+        "expect": {"active_contains": ["喜欢钓鱼"]}
+      },
+      {
+        "day": 3,
+        "op": "search",
+        "session_id": "save_A:Sebastian",
+        "query": "玩家喜欢钓鱼吗",
+        "expect": {"retrieved_excludes": ["喜欢钓鱼"], "active_count": 0}
+      },
+      {
+        "day": 3,
+        "op": "search",
+        "session_id": "save_B:Abigail",
+        "query": "玩家喜欢钓鱼吗",
+        "expect": {"retrieved_excludes": ["喜欢钓鱼"], "active_count": 0}
+      }
+    ]
+  },
+  {
+    "scenario_id": "questions_and_transient_weather_are_not_memory",
+    "category": "write_precision_contract",
+    "npc": "Emily",
+    "steps": [
+      {
+        "day": 5,
+        "op": "chat",
+        "input": "你喜欢热可可还是咖啡？",
+        "expect": {"active_count": 0}
+      },
+      {
+        "day": 6,
+        "op": "chat",
+        "input": "今天下雨了。",
+        "expect": {"active_count": 0}
+      }
+    ]
+  },
+  {
+    "scenario_id": "episode_capacity_over_30_days",
+    "category": "capacity",
+    "npc": "Sam",
+    "max_episodes_per_session": 20,
+    "steps": [
+      {
+        "day": 1,
+        "op": "repeat_episode",
+        "count": 30,
+        "input": "每日普通对话",
+        "expect": {"episode_count": 20}
+      }
+    ]
+  },
+  {
+    "scenario_id": "unsaved_fact_is_removed",
+    "category": "contradiction_and_rollback",
+    "npc": "Penny",
+    "steps": [
+      {
+        "day": 7,
+        "op": "chat",
+        "input": "我喜欢种田。",
+        "expect": {"active_contains": ["喜欢种田"]}
+      },
+      {"day": 7, "op": "rollback"},
+      {
+        "day": 8,
+        "op": "assert_memory",
+        "expect": {"active_excludes": ["喜欢种田"], "active_count": 0}
+      }
+    ]
+  },
+  {
+    "scenario_id": "repeated_fact_is_deduplicated",
+    "category": "deduplication",
+    "npc": "Harvey",
+    "steps": [
+      {"day": 1, "op": "chat", "input": "我喜欢钓鱼。"},
+      {"day": 8, "op": "chat", "input": "我喜欢钓鱼。"},
+      {
+        "day": 8,
+        "op": "assert_memory",
+        "expect": {"active_contains": ["喜欢钓鱼"], "active_count": 1}
+      }
+    ]
+  }
+]

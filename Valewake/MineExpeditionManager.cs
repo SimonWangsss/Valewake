@@ -23,6 +23,7 @@ public sealed class MineExpeditionManager
     private readonly IMonitor monitor;
     private readonly ModConfig config;
     private readonly string tracePath;
+    private readonly string traceRunId = $"run_{Guid.NewGuid():N}"[..16];
     private MineExpeditionSaveData data = new();
 
     public MineExpeditionManager(IModHelper helper, IMonitor monitor, ModConfig config)
@@ -141,6 +142,7 @@ public sealed class MineExpeditionManager
             MaxTargets = miningEnabled ? decision.MaxTargets : 0,
             CreatedDay = Game1.Date.TotalDays,
             CreatedTime = Game1.timeOfDay,
+            AcceptedTick = Game1.ticks,
             RuntimePlayerLocation = Game1.currentLocation?.NameOrUniqueName ?? "",
             RuntimeLocationChangedTick = Game1.ticks,
             RuntimeLastProgressTick = Game1.ticks,
@@ -218,6 +220,8 @@ public sealed class MineExpeditionManager
     {
         AppendTrace(new
         {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
             timestamp = DateTimeOffset.UtcNow,
             event_name = "proposal_validated",
             turn_id = turnId,
@@ -234,6 +238,8 @@ public sealed class MineExpeditionManager
     {
         AppendTrace(new
         {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
             timestamp = DateTimeOffset.UtcNow,
             event_name = confirmed ? "confirmation_accepted" : "confirmation_declined",
             turn_id = turnId,
@@ -1001,9 +1007,12 @@ public sealed class MineExpeditionManager
             .ToArray();
         AppendTrace(new
         {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
             timestamp = DateTimeOffset.UtcNow,
             event_name = "manual_target_selection",
             expedition_id = expedition.ExpeditionId,
+            trial_id = expedition.ExpeditionId,
             save_id = expedition.SaveId,
             npc_name = expedition.NpcName,
             result,
@@ -1033,6 +1042,8 @@ public sealed class MineExpeditionManager
         NPC? npc = Game1.getCharacterFromName(expedition.NpcName);
         AppendTrace(new
         {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
             timestamp = DateTimeOffset.UtcNow,
             event_name = eventName,
             turn_id = string.IsNullOrWhiteSpace(expedition.LastCommandTurnId)
@@ -1044,9 +1055,18 @@ public sealed class MineExpeditionManager
             root_turn_id = expedition.SourceTurnId,
             root_proposal_id = expedition.ProposalId,
             expedition_id = expedition.ExpeditionId,
+            trial_id = expedition.ExpeditionId,
             save_id = expedition.SaveId,
             npc_name = expedition.NpcName,
             action = expedition.Action,
+            game_day = Context.IsWorldReady ? Game1.Date.TotalDays : -1,
+            game_time = Context.IsWorldReady ? Game1.timeOfDay : -1,
+            game_tick = Context.IsWorldReady ? Game1.ticks : -1,
+            accepted_tick = expedition.AcceptedTick,
+            active_duration_ticks = Context.IsWorldReady && expedition.AcceptedTick > 0
+                ? Math.Max(0, Game1.ticks - expedition.AcceptedTick)
+                : 0,
+            max_targets = expedition.MaxTargets,
             defense_enabled = expedition.DefenseEnabled,
             mining_enabled = expedition.MiningEnabled,
             mining_mode = expedition.MiningMode,

@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -28,6 +30,9 @@ public sealed class ActionJobManager
     private readonly IMonitor monitor;
     private readonly ModConfig config;
     private readonly string tracePath;
+    private readonly string traceRunId = $"run_{Guid.NewGuid():N}"[..16];
+    private readonly string configHash;
+    private readonly Dictionary<string, PendingActionPostcheck> pendingPostchecks = new();
     private ActionJobSaveData data = new();
 
     public ActionJobManager(IModHelper helper, IMonitor monitor, ModConfig config)
@@ -35,6 +40,9 @@ public sealed class ActionJobManager
         this.helper = helper;
         this.monitor = monitor;
         this.config = config;
+        configHash = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(config)))
+        )[..12].ToLowerInvariant();
         tracePath = Path.Combine(helper.DirectoryPath, "data", "traces", "action_trace.jsonl");
     }
 
@@ -47,6 +55,7 @@ public sealed class ActionJobManager
             job.LastMessage = "The game was reloaded before the job completed.";
             RestoreNpc(job);
             Trace(job, "recovered_after_reload");
+            SchedulePostcheck(job);
         }
         Save();
     }
@@ -143,6 +152,7 @@ public sealed class ActionJobManager
             MaxTargets = decision.MaxTargets,
             CreatedDay = Game1.Date.TotalDays,
             CreatedTime = Game1.timeOfDay,
+            AcceptedTick = Game1.ticks,
             // Farm-help requests target eligible farm tiles, not whichever tiles happen
             // to be near the player when they enter the map.
             AnchorX = -1,
@@ -180,6 +190,9 @@ public sealed class ActionJobManager
     {
         AppendTrace(new
         {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
+            config_hash = configHash,
             timestamp = DateTimeOffset.UtcNow,
             event_name = "proposal_validated",
             turn_id = sourceTurnId,
@@ -189,6 +202,9 @@ public sealed class ActionJobManager
             disposition = proposal.Disposition,
             confidence = proposal.Confidence,
             evidence = proposal.Evidence,
+            game_day = Context.IsWorldReady ? Game1.Date.TotalDays : -1,
+            game_time = Context.IsWorldReady ? Game1.timeOfDay : -1,
+            game_tick = Context.IsWorldReady ? Game1.ticks : -1,
             allowed = decision.Allowed,
             message = decision.Message,
             max_targets = decision.MaxTargets
@@ -203,12 +219,18 @@ public sealed class ActionJobManager
     {
         AppendTrace(new
         {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
+            config_hash = configHash,
             timestamp = DateTimeOffset.UtcNow,
             event_name = confirmed ? "confirmation_accepted" : "confirmation_declined",
             turn_id = sourceTurnId,
             proposal_id = proposal.ProposalId,
             npc_name = npc.Name,
             action = proposal.Action,
+            game_day = Context.IsWorldReady ? Game1.Date.TotalDays : -1,
+            game_time = Context.IsWorldReady ? Game1.timeOfDay : -1,
+            game_tick = Context.IsWorldReady ? Game1.ticks : -1,
             confirmed
         });
     }
@@ -218,6 +240,7 @@ public sealed class ActionJobManager
         if (!Context.IsWorldReady || !Context.IsMainPlayer)
             return;
 
+        UpdatePostchecks();
         foreach (ActionJob job in data.Jobs.Where(job => !ActionJobStates.IsTerminal(job.State)).ToList())
             UpdateJob(job);
     }
@@ -246,6 +269,7 @@ public sealed class ActionJobManager
             job.LastMessage = reason;
             RestoreNpc(job);
             Trace(job, "cancelled");
+            SchedulePostcheck(job);
         }
         Save();
     }
@@ -342,8 +366,16 @@ public sealed class ActionJobManager
                     Fail(job, "NPC left the farm before work began.", terminal: false);
                     return;
                 }
-                if (job.Targets.Count == 0)
-                    job.Targets = FindTargets(job, farm);
+                if (job.Targets.Count == 0 && job.BaselineSelectedTargetCount == 0)
+                {
+                    List<ActionTile> eligibleTargets = FindEligibleTargets(job, farm);
+                    job.BaselineEligibleTargetCount = eligibleTargets.Count;
+                    job.Targets = eligibleTargets.Take(job.MaxTargets).ToList();
+                    job.BaselineSelectedTargetCount = job.Targets.Count;
+                    job.RuntimeBaselineWorldState = CaptureFarmWorldState(farm);
+                    Save();
+                    TraceBaseline(job, eligibleTargets);
+                }
                 if (job.Targets.Count == 0)
                 {
                     BeginReturn(job, npc, farm, "No eligible targets were found.");
@@ -497,6 +529,7 @@ public sealed class ActionJobManager
             StartVisibleWorkAnimation(job, npc);
             job.RuntimeActionStartedTick = Game1.ticks;
             job.RuntimeNextTick = Game1.ticks + (job.Action == ActionIds.ChopTrees ? 18 : 54);
+            Trace(job, "target_path_succeeded");
             Transition(job, ActionJobStates.Acting, "Playing the work animation.");
             return;
         }
@@ -509,6 +542,7 @@ public sealed class ActionJobManager
             job.RuntimeStandCandidateIndex++;
             if (job.RuntimeStandCandidateIndex < job.RuntimeStandCandidates.Count)
             {
+                job.TargetPathRetryCount++;
                 StartPathToCurrentStand(job, npc, farm);
                 job.LastMessage = "Path failed; trying another adjacent work tile.";
                 Save();
@@ -538,24 +572,28 @@ public sealed class ActionJobManager
         }
     }
 
-    private static void StartPathToCurrentStand(ActionJob job, NPC npc, Farm farm)
+    private void StartPathToCurrentStand(ActionJob job, NPC npc, Farm farm)
     {
         ActionTile stand = job.RuntimeStandCandidates[job.RuntimeStandCandidateIndex];
         ActionTile target = job.Targets[job.CurrentTargetIndex];
         job.RuntimeStandTile = stand;
         job.RuntimePathStartedTick = Game1.ticks;
+        job.TargetPathAttemptCount++;
         npc.controller = new PathFindController(
             npc,
             farm,
             new Point(stand.X, stand.Y),
             FacingToward(stand, target)
         );
+        Trace(job, "target_path_attempt_started");
     }
 
     private void ExecuteCurrentTarget(ActionJob job, NPC npc, Farm farm)
     {
         ActionTile target = job.Targets[job.CurrentTargetIndex];
         Vector2 tile = new(target.X, target.Y);
+        job.LastTarget = new ActionTile(target.X, target.Y);
+        job.RuntimeLastTargetPreState = CaptureTileState(farm, tile);
         job.LastTargetType = job.Action == ActionIds.WaterCrops ? "crop" : "weed";
         if (job.Action == ActionIds.ChopTrees)
             job.LastTargetType = "mature_tree";
@@ -575,6 +613,13 @@ public sealed class ActionJobManager
         {
             TreeWorkResult treeResult = ChopTree(farm, tile);
             job.LastTargetAllowed = treeResult.WasEligible;
+            job.RuntimeLastTargetPostState = CaptureTileState(farm, tile);
+            job.RuntimeLastMutationObserved =
+                !string.Equals(
+                    job.RuntimeLastTargetPreState,
+                    job.RuntimeLastTargetPostState,
+                    StringComparison.Ordinal
+                );
             npc.Sprite.ClearAnimation();
             if (treeResult.NeedsMoreStrikes && job.RuntimeTargetStrikes < 20)
             {
@@ -596,6 +641,13 @@ public sealed class ActionJobManager
             ActionIds.ClearWeeds => ClearWeed(farm, tile),
             _ => false
         };
+        job.RuntimeLastTargetPostState = CaptureTileState(farm, tile);
+        job.RuntimeLastMutationObserved =
+            !string.Equals(
+                job.RuntimeLastTargetPreState,
+                job.RuntimeLastTargetPostState,
+                StringComparison.Ordinal
+            );
         CompleteCurrentTarget(job, npc, success);
     }
 
@@ -616,7 +668,7 @@ public sealed class ActionJobManager
         Trace(job, success ? "target_completed" : "target_skipped");
     }
 
-    private List<ActionTile> FindTargets(ActionJob job, Farm farm)
+    private List<ActionTile> FindEligibleTargets(ActionJob job, Farm farm)
     {
         Vector2 anchor = FindFarmBoundaryEntry(farm);
         IEnumerable<Vector2> candidates = job.Action switch
@@ -641,7 +693,6 @@ public sealed class ActionJobManager
             .Where(tile => job.AnchorX < 0 ||
                 TileDistance(tile, anchor) <= config.ActionTargetRadiusTiles)
             .OrderBy(tile => TileDistance(tile, anchor))
-            .Take(job.MaxTargets)
             .Select(tile => new ActionTile((int)tile.X, (int)tile.Y))
             .ToList();
     }
@@ -862,6 +913,7 @@ public sealed class ActionJobManager
             Math.Max(1800, config.ActionPathTimeoutTicks);
         if (arrived)
         {
+            Trace(job, "return_path_succeeded");
             string suffix = job.ReturnContext.OriginKind switch
             {
                 ActionOriginKinds.Farm => " NPC returned to the original farm position.",
@@ -885,6 +937,7 @@ public sealed class ActionJobManager
                 Fail(job, "NPC could not find a connected path back to the departure point.", terminal: false);
                 return;
             }
+            job.ReturnPathRetryCount++;
             StartReturnPath(job, npc, farm);
             job.LastMessage = "Return path failed; trying another nearby exit tile.";
             Save();
@@ -921,18 +974,20 @@ public sealed class ActionJobManager
             .ToList();
     }
 
-    private static void StartReturnPath(ActionJob job, NPC npc, Farm farm)
+    private void StartReturnPath(ActionJob job, NPC npc, Farm farm)
     {
         ActionTile destination =
             job.RuntimeReturnCandidates[job.RuntimeReturnCandidateIndex];
         job.RuntimeReturnTile = destination;
         job.RuntimePathStartedTick = Game1.ticks;
+        job.ReturnPathAttemptCount++;
         npc.controller = new PathFindController(
             npc,
             farm,
             new Point(destination.X, destination.Y),
             2
         );
+        Trace(job, "return_path_attempt_started");
     }
 
     private static void StartWorkAnimation(NPC npc)
@@ -1105,6 +1160,7 @@ public sealed class ActionJobManager
         RestoreNpc(job);
         Save();
         Trace(job, "completed");
+        SchedulePostcheck(job);
         Game1.addHUDMessage(new HUDMessage(
             $"{job.NpcName} finished: {job.CompletedTargets} completed, {job.FailedTargets} skipped."
         ));
@@ -1117,6 +1173,7 @@ public sealed class ActionJobManager
         RestoreNpc(job);
         Save();
         Trace(job, "failed");
+        SchedulePostcheck(job);
         monitor.Log($"Action job {job.JobId} failed: {message}", LogLevel.Warn);
         Game1.addHUDMessage(new HUDMessage($"{job.NpcName}'s job stopped: {message}"));
     }
@@ -1147,34 +1204,193 @@ public sealed class ActionJobManager
 
     private void Save() => helper.Data.WriteSaveData(SaveDataKey, data);
 
+    private void TraceBaseline(ActionJob job, IReadOnlyCollection<ActionTile> eligibleTargets)
+    {
+        AppendTrace(new
+        {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
+            config_hash = configHash,
+            mod_version = typeof(ActionJobManager).Assembly.GetName().Version?.ToString() ?? "",
+            timestamp = DateTimeOffset.UtcNow,
+            event_name = "job_baseline",
+            turn_id = job.SourceTurnId,
+            proposal_id = job.ProposalId,
+            job_id = job.JobId,
+            trial_id = job.JobId,
+            save_id = job.SaveId,
+            npc_name = job.NpcName,
+            action = job.Action,
+            game_day = Game1.Date.TotalDays,
+            game_time = Game1.timeOfDay,
+            game_tick = Game1.ticks,
+            max_targets = job.MaxTargets,
+            eligible_target_count = eligibleTargets.Count,
+            selected_target_count = job.Targets.Count,
+            eligible_targets = eligibleTargets.Select(tile => new
+            {
+                key = WorldKeyForAction(job.Action, tile),
+                x = tile.X,
+                y = tile.Y,
+                selected = job.Targets.Any(item => item.X == tile.X && item.Y == tile.Y),
+                state = CaptureTileState(Game1.getFarm(), new Vector2(tile.X, tile.Y))
+            }),
+            selected_target_keys = job.Targets.Select(tile => WorldKeyForAction(job.Action, tile)),
+            world_state_before = job.RuntimeBaselineWorldState
+        });
+    }
+
+    private void SchedulePostcheck(ActionJob job)
+    {
+        pendingPostchecks[job.JobId] = new PendingActionPostcheck
+        {
+            Job = job,
+            DueTick = Game1.ticks + 90
+        };
+    }
+
+    private void UpdatePostchecks()
+    {
+        foreach (PendingActionPostcheck pending in pendingPostchecks.Values
+                     .Where(item => Game1.ticks >= item.DueTick)
+                     .ToList())
+        {
+            Trace(pending.Job, "job_postcheck");
+            pendingPostchecks.Remove(pending.Job.JobId);
+        }
+    }
+
+    private static Dictionary<string, string> CaptureFarmWorldState(Farm farm)
+    {
+        Dictionary<string, string> result = new(StringComparer.Ordinal);
+        foreach (var pair in farm.Objects.Pairs)
+        {
+            result[WorldKey("object", pair.Key)] =
+                $"object|{pair.Value.QualifiedItemId}|{pair.Value.Name}";
+        }
+        foreach (var pair in farm.terrainFeatures.Pairs)
+        {
+            result[WorldKey("terrain", pair.Key)] = pair.Value switch
+            {
+                HoeDirt dirt =>
+                    $"hoedirt|state={dirt.state.Value}|crop={dirt.crop is not null}|dead={dirt.crop?.dead.Value ?? false}",
+                Tree tree =>
+                    $"tree|stage={tree.growthStage.Value}|tapped={tree.tapped.Value}|stump={tree.stump.Value}",
+                _ => pair.Value.GetType().Name
+            };
+        }
+        return result;
+    }
+
+    private static string CaptureTileState(Farm farm, Vector2 tile)
+    {
+        string objectState = farm.Objects.TryGetValue(tile, out StardewValley.Object? obj)
+            ? $"object|{obj.QualifiedItemId}|{obj.Name}"
+            : "object|absent";
+        string terrainState = farm.terrainFeatures.TryGetValue(tile, out TerrainFeature? feature)
+            ? feature switch
+            {
+                HoeDirt dirt =>
+                    $"hoedirt|state={dirt.state.Value}|crop={dirt.crop is not null}|dead={dirt.crop?.dead.Value ?? false}",
+                Tree tree =>
+                    $"tree|stage={tree.growthStage.Value}|tapped={tree.tapped.Value}|stump={tree.stump.Value}",
+                _ => feature.GetType().Name
+            }
+            : "terrain|absent";
+        return $"{objectState};{terrainState}";
+    }
+
+    private static string WorldKey(string kind, Vector2 tile) =>
+        $"{kind}:{(int)tile.X}:{(int)tile.Y}";
+
+    private static string WorldKeyForAction(string action, ActionTile tile) =>
+        $"{(action == ActionIds.ClearWeeds ? "object" : "terrain")}:{tile.X}:{tile.Y}";
+
+    private static List<string> ChangedWorldKeys(
+        IReadOnlyDictionary<string, string> before,
+        IReadOnlyDictionary<string, string> after)
+    {
+        return before.Keys
+            .Union(after.Keys)
+            .Where(key =>
+                !before.TryGetValue(key, out string? beforeValue) ||
+                !after.TryGetValue(key, out string? afterValue) ||
+                !string.Equals(beforeValue, afterValue, StringComparison.Ordinal))
+            .OrderBy(key => key, StringComparer.Ordinal)
+            .ToList();
+    }
+
     private void Trace(ActionJob job, string eventName)
     {
         NPC? npc = Game1.getCharacterFromName(job.NpcName);
-        ActionTile? currentTarget =
-            job.CurrentTargetIndex >= 0 && job.CurrentTargetIndex < job.Targets.Count
+        bool targetOutcomeEvent = eventName is
+            "target_completed" or "target_skipped" or "target_strike" or "background_target_completed";
+        ActionTile? currentTarget = targetOutcomeEvent && job.LastTarget is not null
+            ? job.LastTarget
+            : job.CurrentTargetIndex >= 0 && job.CurrentTargetIndex < job.Targets.Count
                 ? job.Targets[job.CurrentTargetIndex]
                 : null;
+        bool includeWorldPostcheck = eventName is
+            "completed" or "failed" or "cancelled" or "recovered_after_reload" or "job_postcheck";
+        Dictionary<string, string>? worldStateAfter =
+            includeWorldPostcheck && job.RuntimeBaselineWorldState.Count > 0
+                ? CaptureFarmWorldState(Game1.getFarm())
+                : null;
+        List<string> changedWorldKeys = worldStateAfter is null
+            ? new List<string>()
+            : ChangedWorldKeys(job.RuntimeBaselineWorldState, worldStateAfter);
+        HashSet<string> intendedKeys = job.Targets
+            .Select(tile => WorldKeyForAction(job.Action, tile))
+            .ToHashSet(StringComparer.Ordinal);
+        List<string> unexpectedMutationKeys = changedWorldKeys
+            .Where(key => !intendedKeys.Contains(key))
+            .ToList();
         AppendTrace(new
         {
+            trace_schema = "valewake-action-trace-2",
+            run_id = traceRunId,
+            config_hash = configHash,
+            mod_version = typeof(ActionJobManager).Assembly.GetName().Version?.ToString() ?? "",
             timestamp = DateTimeOffset.UtcNow,
             event_name = eventName,
             turn_id = job.SourceTurnId,
             job_id = job.JobId,
+            trial_id = job.JobId,
             proposal_id = job.ProposalId,
             save_id = job.SaveId,
             npc_name = job.NpcName,
             action = job.Action,
+            game_day = Context.IsWorldReady ? Game1.Date.TotalDays : -1,
+            game_time = Context.IsWorldReady ? Game1.timeOfDay : -1,
+            game_tick = Context.IsWorldReady ? Game1.ticks : -1,
+            accepted_tick = job.AcceptedTick,
+            active_duration_ticks = Context.IsWorldReady && job.AcceptedTick > 0
+                ? Math.Max(0, Game1.ticks - job.AcceptedTick)
+                : 0,
             origin_kind = job.ReturnContext.OriginKind,
             state = job.State,
+            max_targets = job.MaxTargets,
+            baseline_eligible_target_count = job.BaselineEligibleTargetCount,
+            baseline_selected_target_count = job.BaselineSelectedTargetCount,
             completed_targets = job.CompletedTargets,
             failed_targets = job.FailedTargets,
             target_count = job.Targets.Count,
+            target_path_attempt_count = job.TargetPathAttemptCount,
+            target_path_retry_count = job.TargetPathRetryCount,
+            return_path_attempt_count = job.ReturnPathAttemptCount,
+            return_path_retry_count = job.ReturnPathRetryCount,
             current_target = currentTarget,
+            current_target_key = currentTarget is null
+                ? null
+                : WorldKeyForAction(job.Action, currentTarget),
             dispatch_tile = job.RuntimeDispatchTile,
             return_tile = job.RuntimeReturnTile,
             target_type = job.LastTargetType,
             target_qualified_id = job.LastTargetQualifiedId,
             target_allowed = job.LastTargetAllowed,
+            target_pre_state = job.RuntimeLastTargetPreState,
+            target_post_state = job.RuntimeLastTargetPostState,
+            mutation_observed = job.RuntimeLastMutationObserved,
             npc_location = npc?.currentLocation?.NameOrUniqueName,
             return_location = job.ReturnContext.LocationName,
             location_restored = npc is not null && string.Equals(
@@ -1183,7 +1399,18 @@ public sealed class ActionJobManager
                 StringComparison.Ordinal
             ),
             schedule_restored = npc is not null && npc.followSchedule == job.ReturnContext.FollowSchedule,
+            expected_return_tile = new { x = job.ReturnContext.TileX, y = job.ReturnContext.TileY },
+            expected_facing_direction = job.ReturnContext.FacingDirection,
+            expected_follow_schedule = job.ReturnContext.FollowSchedule,
+            facing_restored = npc is not null && npc.FacingDirection == job.ReturnContext.FacingDirection,
+            exact_tile_restored = npc is not null &&
+                (int)npc.Tile.X == job.ReturnContext.TileX &&
+                (int)npc.Tile.Y == job.ReturnContext.TileY,
+            controller_present = npc?.controller is not null,
             npc_tile = npc is null ? null : new { x = (int)npc.Tile.X, y = (int)npc.Tile.Y },
+            changed_world_keys = changedWorldKeys,
+            unexpected_mutation_keys = unexpectedMutationKeys,
+            world_state_after = worldStateAfter,
             message = job.LastMessage
         });
     }
@@ -1208,4 +1435,10 @@ public sealed class ActionJobManager
 
     private static int TileDistance(Vector2 left, Vector2 right) =>
         Math.Abs((int)left.X - (int)right.X) + Math.Abs((int)left.Y - (int)right.Y);
+
+    private sealed class PendingActionPostcheck
+    {
+        public ActionJob Job { get; init; } = new();
+        public long DueTick { get; init; }
+    }
 }

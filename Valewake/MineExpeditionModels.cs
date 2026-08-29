@@ -43,6 +43,7 @@ public sealed class MineExpedition
     public int MonstersDefeated { get; set; }
     public int CreatedDay { get; set; }
     public int CreatedTime { get; set; }
+    public long AcceptedTick { get; set; }
     public string LastMessage { get; set; } = "";
     public string LastTargetQualifiedId { get; set; } = "";
     public string LastTargetName { get; set; } = "";

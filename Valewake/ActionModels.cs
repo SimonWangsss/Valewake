@@ -62,6 +62,13 @@ public sealed class ActionJob
     public int MaxTargets { get; set; } = 10;
     public int CreatedDay { get; set; }
     public int CreatedTime { get; set; }
+    public long AcceptedTick { get; set; }
+    public int BaselineEligibleTargetCount { get; set; }
+    public int BaselineSelectedTargetCount { get; set; }
+    public int TargetPathAttemptCount { get; set; }
+    public int TargetPathRetryCount { get; set; }
+    public int ReturnPathAttemptCount { get; set; }
+    public int ReturnPathRetryCount { get; set; }
     public int AnchorX { get; set; } = -1;
     public int AnchorY { get; set; } = -1;
     public List<ActionTile> Targets { get; set; } = new();
@@ -72,6 +79,7 @@ public sealed class ActionJob
     public string LastTargetType { get; set; } = "";
     public string LastTargetQualifiedId { get; set; } = "";
     public bool LastTargetAllowed { get; set; }
+    public ActionTile? LastTarget { get; set; }
     public ActionReturnContext ReturnContext { get; set; } = new();
 
     [JsonIgnore]
@@ -115,6 +123,18 @@ public sealed class ActionJob
 
     [JsonIgnore]
     public int RuntimeTargetStrikes { get; set; }
+
+    [JsonIgnore]
+    public Dictionary<string, string> RuntimeBaselineWorldState { get; set; } = new();
+
+    [JsonIgnore]
+    public string RuntimeLastTargetPreState { get; set; } = "";
+
+    [JsonIgnore]
+    public string RuntimeLastTargetPostState { get; set; } = "";
+
+    [JsonIgnore]
+    public bool RuntimeLastMutationObserved { get; set; }
 }
 
 public sealed class ActionTile
