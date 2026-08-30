@@ -49,6 +49,21 @@ class StardewAgent:
             )
         )
 
+    def update_llm_config(self, backend: str, api_base: str, api_key: str, model: str) -> None:
+        """Swap the LLM client at runtime (used by the in-game provider menu)."""
+        self.llm = LLMClient(
+            LLMConfig(
+                backend=backend,
+                api_base=(api_base or "").rstrip("/"),
+                api_key=api_key,
+                model=model,
+                timeout_seconds=self.settings.llm_timeout_seconds,
+                thinking_mode=self.settings.llm_thinking_mode,
+                max_tokens=self.settings.llm_max_tokens,
+                json_mode=self.settings.llm_json_mode,
+            )
+        )
+
     def chat(
         self,
         player_input: str,

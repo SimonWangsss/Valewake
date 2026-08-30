@@ -33,7 +33,60 @@ class LLMClient:
             return result
         if self.config.backend == "openai":
             return self._openai_chat(messages, temperature)
+        if self.config.backend == "anthropic":
+            return self._anthropic_chat(messages, temperature)
         raise ValueError(f"Unsupported LLM_BACKEND: {self.config.backend}")
+
+    def _anthropic_chat(self, messages: List[Dict[str, str]], temperature: float) -> str:
+        system_parts = [m["content"] for m in messages if m.get("role") == "system"]
+        convo = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages
+            if m.get("role") in {"user", "assistant"}
+        ]
+        payload = {
+            "model": self.config.model,
+            "max_tokens": self.config.max_tokens,
+            "temperature": temperature,
+            "messages": convo,
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": self.config.api_key,
+            "anthropic-version": "2023-06-01",
+        }
+        request = urllib.request.Request(
+            f"{self.config.api_base}/v1/messages",
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        started = time.perf_counter()
+        try:
+            with urllib.request.urlopen(request, timeout=self.config.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"LLM HTTP {exc.code}: {body}") from exc
+
+        usage = data.get("usage") or {}
+        text = "".join(
+            block.get("text", "")
+            for block in data.get("content", [])
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+        self.last_metrics = {
+            "provider": "anthropic",
+            "model": self.config.model,
+            "thinking_mode": "provider_default",
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+            "prompt_tokens": usage.get("input_tokens"),
+            "completion_tokens": usage.get("output_tokens"),
+            "total_tokens": (usage.get("input_tokens") or 0) + (usage.get("output_tokens") or 0),
+        }
+        return text.strip()
 
     def _openai_chat(self, messages: List[Dict[str, str]], temperature: float) -> str:
         payload = {

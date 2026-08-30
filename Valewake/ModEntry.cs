@@ -120,6 +120,12 @@ public sealed class ModEntry : Mod
             (_, _) => SetExpeditionTarget(Helper.Input.GetCursorPosition().GrabTile)
         );
 
+        helper.ConsoleCommands.Add(
+            "agent_llm",
+            "Open the in-game LLM provider / API key / model configuration menu.",
+            (_, _) => OpenLlmConfigMenu()
+        );
+
         Monitor.Log(
             "Valewake loaded. Use '" + Config.StateCommandName +
             "' for state or '" + Config.ChatCommandName +
@@ -144,6 +150,54 @@ public sealed class ModEntry : Mod
     {
         backendClient?.Dispose();
         backendProcessManager?.Dispose();
+    }
+
+    private void OpenLlmConfigMenu()
+    {
+        _ = OpenLlmConfigMenuAsync();
+    }
+
+    private async Task OpenLlmConfigMenuAsync()
+    {
+        if (backendClient is null)
+            return;
+        if (backendProcessManager is not null && !await backendProcessManager.EnsureReadyAsync())
+            return;
+        try
+        {
+            LlmConfigResponse config = await backendClient.GetLlmConfigAsync();
+            mainThreadActions.Enqueue(() =>
+            {
+                Game1.activeClickableMenu = new LlmConfigMenu(
+                    config,
+                    request => _ = SaveLlmConfigAsync(request),
+                    () => { }
+                );
+            });
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Failed to load LLM config: {ex.Message}", LogLevel.Error);
+        }
+    }
+
+    private async Task SaveLlmConfigAsync(LlmConfigRequest request)
+    {
+        if (backendClient is null)
+            return;
+        try
+        {
+            await backendClient.SetLlmConfigAsync(request);
+            Monitor.Log($"LLM config saved: {request.Provider} / {request.Model}.", LogLevel.Info);
+            if (Context.IsWorldReady)
+                Game1.addHUDMessage(new HUDMessage("LLM 配置已保存。"));
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"Failed to save LLM config: {ex.Message}", LogLevel.Error);
+            if (Context.IsWorldReady)
+                Game1.addHUDMessage(new HUDMessage("LLM 配置保存失败，请检查 API Key。"));
+        }
     }
 
     private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)

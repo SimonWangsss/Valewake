@@ -3,8 +3,9 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
+from stardew_backend import providers
 from stardew_backend.agent import StardewAgent
-from stardew_backend.config import Settings
+from stardew_backend.config import Settings, save_llm_config
 
 
 class ChatRequest(BaseModel):
@@ -13,6 +14,14 @@ class ChatRequest(BaseModel):
     session_id: str = "default"
     conversation_history: list[Dict[str, str]] = Field(default_factory=list)
     debug: bool = False
+
+
+class LlmConfigRequest(BaseModel):
+    provider: str = ""
+    api_base: str = ""
+    api_key: str = ""
+    model: str = ""
+    backend: str = "openai"
 
 
 class ChatResponse(BaseModel):
@@ -58,13 +67,57 @@ def health() -> Dict[str, Any]:
         "memory_schema": 3,
         "lore_chunks": len(agent.rag.chunks),
         "curated_npc_profiles": agent.personas.curated_count,
-        "llm_backend": settings.llm_backend,
-        "llm_model": settings.llm_model,
-        "llm_thinking_mode": settings.llm_thinking_mode,
+        "llm_backend": agent.llm.config.backend,
+        "llm_model": agent.llm.config.model,
+        "llm_thinking_mode": agent.llm.config.thinking_mode,
         "rag_dir": str(settings.rag_dir),
         "memory_path": str(settings.memory_path),
         "trace_path": str(settings.trace_path),
     }
+
+
+@app.get("/config")
+def get_config() -> Dict[str, Any]:
+    provider = providers.provider_by_url(agent.llm.config.api_base)
+    return {
+        "providers": providers.PROVIDERS,
+        "current": {
+            "provider": (provider or {}).get("id", ""),
+            "backend": agent.llm.config.backend,
+            "api_base": agent.llm.config.api_base,
+            "model": agent.llm.config.model,
+            "has_api_key": bool(agent.llm.config.api_key),
+        },
+    }
+
+
+@app.post("/config")
+def set_config(request: LlmConfigRequest) -> Dict[str, Any]:
+    api_base = (request.api_base or "").strip().rstrip("/")
+    backend = (request.backend or "").strip().lower() or "openai"
+    model = (request.model or "").strip()
+    api_key = (request.api_key or "").strip()
+
+    provider = providers.find_provider((request.provider or "").strip())
+    if provider is not None:
+        if not api_base:
+            api_base = provider["base_url"]
+        backend = provider["format"]
+    if not api_base:
+        return {"ok": False, "error": "missing_api_base"}
+    if not api_key:
+        return {"ok": False, "error": "missing_api_key"}
+    if not model:
+        return {"ok": False, "error": "missing_model"}
+
+    agent.update_llm_config(backend, api_base, api_key, model)
+    save_llm_config({
+        "llm_backend": backend,
+        "llm_api_base": api_base,
+        "llm_api_key": api_key,
+        "llm_model": model,
+    })
+    return {"ok": True, "backend": backend, "api_base": api_base, "model": model}
 
 
 @app.post("/chat", response_model=ChatResponse)

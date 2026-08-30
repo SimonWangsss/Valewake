@@ -20,6 +20,7 @@ public sealed class AgentBackendClient : IDisposable
     private readonly Uri memoryRollbackEndpoint;
     private readonly Uri traceEventEndpoint;
     private readonly Uri traceMarkEndpoint;
+    private readonly Uri configEndpoint;
 
     public AgentBackendClient(string backendUrl, int timeoutSeconds)
     {
@@ -29,6 +30,7 @@ public sealed class AgentBackendClient : IDisposable
         memoryRollbackEndpoint = new Uri(serviceRoot, "memory/rollback");
         traceEventEndpoint = new Uri(serviceRoot, "trace/event");
         traceMarkEndpoint = new Uri(serviceRoot, "trace/mark");
+        configEndpoint = new Uri(serviceRoot, "config");
         httpClient = new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(Math.Max(5, timeoutSeconds))
@@ -78,6 +80,25 @@ public sealed class AgentBackendClient : IDisposable
             new { turn_id = turnId, label, note, tags = Array.Empty<string>() },
             cancellationToken
         );
+
+    public async Task<LlmConfigResponse> GetLlmConfigAsync(CancellationToken cancellationToken = default)
+    {
+        using HttpResponseMessage response = await httpClient.GetAsync(configEndpoint, cancellationToken);
+        string responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+            throw new InvalidOperationException($"Backend returned {(int)response.StatusCode}: {responseText}");
+        return JsonSerializer.Deserialize<LlmConfigResponse>(responseText, JsonOptions) ?? new LlmConfigResponse();
+    }
+
+    public async Task SetLlmConfigAsync(LlmConfigRequest request, CancellationToken cancellationToken = default)
+    {
+        string json = JsonSerializer.Serialize(request, JsonOptions);
+        using StringContent content = new(json, Encoding.UTF8, "application/json");
+        using HttpResponseMessage response = await httpClient.PostAsync(configEndpoint, content, cancellationToken);
+        string responseText = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode || responseText.Contains("\"ok\":false", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Backend config returned {(int)response.StatusCode}: {responseText}");
+    }
 
     private async Task SendMemoryOperationAsync(
         Uri operationEndpoint,
