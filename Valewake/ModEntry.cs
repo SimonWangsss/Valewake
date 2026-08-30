@@ -120,12 +120,6 @@ public sealed class ModEntry : Mod
             (_, _) => SetExpeditionTarget(Helper.Input.GetCursorPosition().GrabTile)
         );
 
-        helper.ConsoleCommands.Add(
-            "agent_llm",
-            "Open the in-game LLM provider / API key / model configuration menu.",
-            (_, _) => OpenLlmConfigMenu()
-        );
-
         Monitor.Log(
             "Valewake loaded. Use '" + Config.StateCommandName +
             "' for state or '" + Config.ChatCommandName +
@@ -136,6 +130,7 @@ public sealed class ModEntry : Mod
 
     private void OnGameLaunched(object? sender, GameLaunchedEventArgs e)
     {
+        RegisterGenericModConfigMenu();
         Monitor.Log($"Agent backend configured at: {Config.BackendUrl}", LogLevel.Info);
         _ = EnsureBackendReadyAsync();
     }
@@ -152,51 +147,126 @@ public sealed class ModEntry : Mod
         backendProcessManager?.Dispose();
     }
 
-    private void OpenLlmConfigMenu()
+    private static readonly (string Id, string Name, string Url, string Format)[] LlmProviders =
     {
-        _ = OpenLlmConfigMenuAsync();
-    }
+        ("deepseek", "DeepSeek", "https://api.deepseek.com", "openai"),
+        ("openai", "OpenAI", "https://api.openai.com/v1", "openai"),
+        ("anthropic", "Anthropic Claude", "https://api.anthropic.com", "anthropic"),
+        ("qwen", "通义千问 Qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "openai"),
+        ("gemini", "Google Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "openai"),
+        ("openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openai"),
+        ("custom", "自定义 / 本地 (Ollama 等)", "", "openai"),
+    };
 
-    private async Task OpenLlmConfigMenuAsync()
+    private void RegisterGenericModConfigMenu()
     {
-        if (backendClient is null)
+        IGenericModConfigMenuApi? api =
+            Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
+        if (api is null)
             return;
-        if (backendProcessManager is not null && !await backendProcessManager.EnsureReadyAsync())
-            return;
-        try
-        {
-            LlmConfigResponse config = await backendClient.GetLlmConfigAsync();
-            mainThreadActions.Enqueue(() =>
+
+        api.Register(
+            ModManifest,
+            reset: () => { },
+            save: () =>
             {
-                Game1.activeClickableMenu = new LlmConfigMenu(
-                    config,
-                    request => _ = SaveLlmConfigAsync(request),
-                    () => { }
-                );
-            });
+                Helper.WriteConfig(Config);
+                WriteLlmConfigFile();
+                _ = SyncLlmConfigToBackendAsync();
+            }
+        );
+
+        api.AddDropdownOption(
+            ModManifest,
+            () => Array.FindIndex(LlmProviders, p => p.Id == Config.LlmProvider),
+            value =>
+            {
+                Config.LlmProvider = LlmProviders[value].Id;
+                Config.LlmApiBase = LlmProviders[value].Url;
+            },
+            () => LlmProviders.Select(p => p.Name).ToArray(),
+            () => "LLM 服务商",
+            () => "选择后自动带出官方地址，无需手填 URL"
+        );
+
+        api.AddTextOption(
+            ModManifest,
+            () => Config.LlmApiKey,
+            value => Config.LlmApiKey = value,
+            () => "API Key",
+            () => "填入你的 API Key"
+        );
+
+        api.AddTextOption(
+            ModManifest,
+            () => Config.LlmModel,
+            value => Config.LlmModel = value,
+            () => "模型",
+            () => "模型名，可手填（DeepSeek 用 deepseek-v4-flash）"
+        );
+
+        api.AddTextOption(
+            ModManifest,
+            () => Config.LlmApiBase,
+            value => Config.LlmApiBase = value,
+            () => "API 地址",
+            () => "选了服务商会自动填；仅自定义/本地时需要手填"
+        );
+
+        api.AddBoolOption(
+            ModManifest,
+            () => Config.DebugLogging,
+            value => Config.DebugLogging = value,
+            () => "调试日志"
+        );
+    }
+
+    private void WriteLlmConfigFile()
+    {
+        try
+        {
+            string dir = System.IO.Path.Combine(Helper.DirectoryPath, "Backend");
+            System.IO.Directory.CreateDirectory(dir);
+            var payload = new Dictionary<string, string>
+            {
+                ["llm_backend"] = LlmProviders[Array.FindIndex(LlmProviders, p => p.Id == Config.LlmProvider)].Format,
+                ["llm_api_base"] = Config.LlmApiBase,
+                ["llm_api_key"] = Config.LlmApiKey,
+                ["llm_model"] = Config.LlmModel,
+            };
+            System.IO.File.WriteAllText(
+                System.IO.Path.Combine(dir, "llm_config.json"),
+                System.Text.Json.JsonSerializer.Serialize(
+                    payload,
+                    new System.Text.Json.JsonSerializerOptions { WriteIndented = true }
+                )
+            );
         }
         catch (Exception ex)
         {
-            Monitor.Log($"Failed to load LLM config: {ex.Message}", LogLevel.Error);
+            Monitor.Log($"Failed to write LLM config file: {ex.Message}", LogLevel.Warn);
         }
     }
 
-    private async Task SaveLlmConfigAsync(LlmConfigRequest request)
+    private async Task SyncLlmConfigToBackendAsync()
     {
-        if (backendClient is null)
+        if (backendClient is null || string.IsNullOrWhiteSpace(Config.LlmApiKey))
             return;
         try
         {
-            await backendClient.SetLlmConfigAsync(request);
-            Monitor.Log($"LLM config saved: {request.Provider} / {request.Model}.", LogLevel.Info);
-            if (Context.IsWorldReady)
-                Game1.addHUDMessage(new HUDMessage("LLM 配置已保存。"));
+            await backendClient.SetLlmConfigAsync(new LlmConfigRequest
+            {
+                Provider = Config.LlmProvider,
+                ApiBase = Config.LlmApiBase,
+                ApiKey = Config.LlmApiKey,
+                Model = Config.LlmModel,
+                Backend = "",
+            });
+            Monitor.Log($"LLM config synced: {Config.LlmProvider} / {Config.LlmModel}.", LogLevel.Info);
         }
         catch (Exception ex)
         {
-            Monitor.Log($"Failed to save LLM config: {ex.Message}", LogLevel.Error);
-            if (Context.IsWorldReady)
-                Game1.addHUDMessage(new HUDMessage("LLM 配置保存失败，请检查 API Key。"));
+            Monitor.Log($"Failed to sync LLM config to backend: {ex.Message}", LogLevel.Warn);
         }
     }
 

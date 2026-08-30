@@ -13,6 +13,13 @@ public sealed class ModConfig
     public string BackendExecutablePath { get; set; } = @"Backend\ValewakeBackend.exe";
     public string BackendWorkingDirectory { get; set; } = "Backend";
     public int BackendStartupTimeoutSeconds { get; set; } = 20;
+
+    // LLM provider settings, editable in-game via Generic Mod Config Menu.
+    public string LlmProvider { get; set; } = "deepseek";
+    public string LlmApiKey { get; set; } = "";
+    public string LlmModel { get; set; } = "deepseek-v4-flash";
+    public string LlmApiBase { get; set; } = "";
+
     public string AgentName { get; set; } = "Valewake";
     public bool EnableAllSocialNpcs { get; set; } = true;
     public string[] ExcludedNpcNames { get; set; } = Array.Empty<string>();
