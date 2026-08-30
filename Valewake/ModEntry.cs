@@ -120,6 +120,26 @@ public sealed class ModEntry : Mod
             (_, _) => SetExpeditionTarget(Helper.Input.GetCursorPosition().GrabTile)
         );
 
+        helper.ConsoleCommands.Add(
+            "agent_setkey",
+            "Set the LLM API key directly (avoids hand-editing config.json). Usage: agent_setkey <api-key>",
+            (command, args) =>
+            {
+                if (args.Length == 0 || string.IsNullOrWhiteSpace(args[0]))
+                {
+                    Monitor.Log("Usage: agent_setkey <api-key>", LogLevel.Warn);
+                    return;
+                }
+                string key = args[0].Trim();
+                Config.LlmApiKey = key;
+                Helper.WriteConfig(Config);
+                WriteLlmConfigFile();
+                _ = SyncLlmConfigToBackendAsync();
+                string suffix = key.Length >= 4 ? key.Substring(key.Length - 4) : key;
+                Monitor.Log($"API key saved ({key.Length} chars, ends '...{suffix}').", LogLevel.Info);
+            }
+        );
+
         Monitor.Log(
             "Valewake loaded. Use '" + Config.StateCommandName +
             "' for state or '" + Config.ChatCommandName +
