@@ -35,7 +35,7 @@ public sealed class ModConfig
     public bool EnableActionAgent { get; set; } = true;
     public bool EnableWaterCropsAction { get; set; } = true;
     public bool EnableClearWeedsAction { get; set; } = true;
-    public bool EnableChopTreesAction { get; set; } = true;
+    public bool EnableChopTreesAction { get; set; } = false;
     public bool EnableCrossMapDispatch { get; set; } = true;
     public int CrossMapDispatchWaitSeconds { get; set; } = 60;
     public int CrossMapFarmLeadSeconds { get; set; } = 8;
@@ -47,7 +47,7 @@ public sealed class ModConfig
     public int MaxWeedsPerJob { get; set; } = 10;
     public int MaxTreesPerJob { get; set; } = 3;
     public int ActionTargetRadiusTiles { get; set; } = 12;
-    public int ActionPathTimeoutTicks { get; set; } = 600;
+    public int ActionPathTimeoutTicks { get; set; } = 1800;
     public bool EnableOffscreenFarmWork { get; set; } = true;
     public int OffscreenWorkIntervalSeconds { get; set; } = 2;
     public bool EnableMineExpeditions { get; set; } = true;

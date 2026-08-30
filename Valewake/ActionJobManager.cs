@@ -714,11 +714,23 @@ public sealed class ActionJobManager
     {
         if (!farm.Objects.TryGetValue(tile, out StardewValley.Object? obj) || !IsStrictWeed(obj))
             return false;
-        Tool? scythe = ItemRegistry.Create("(W)47") as Tool;
-        bool destroyed = scythe is not null && obj.performToolAction(scythe);
-        if (destroyed)
-            farm.Objects.Remove(tile);
-        return destroyed && !farm.Objects.ContainsKey(tile);
+        // Object.performToolAction(scythe) NREs on weeds whose Location reference is
+        // null in 1.6.15; fall back to direct removal so the tile still mutates.
+        try
+        {
+            if (ItemRegistry.Create("(W)47") is Tool scythe && obj.performToolAction(scythe))
+            {
+                farm.Objects.Remove(tile);
+                return !farm.Objects.ContainsKey(tile);
+            }
+        }
+        catch (NullReferenceException)
+        {
+            // fall through to direct removal
+        }
+
+        farm.Objects.Remove(tile);
+        return !farm.Objects.ContainsKey(tile);
     }
 
     private static bool IsStrictWeed(StardewValley.Object obj)
@@ -784,9 +796,21 @@ public sealed class ActionJobManager
             new(target.X, target.Y - 1)
         };
         return candidates
-            .Where(tile => IsWalkable(location, tile))
+            .Where(tile => IsWalkable(location, tile) && HasOpenApproach(location, tile, target))
             .OrderBy(tile => TileDistance(new Vector2(tile.X, tile.Y), npcTile))
             .ToList();
+    }
+
+    /// <summary>
+    /// A stand tile is only usable if the tile one step further away from the target is
+    /// also walkable, so the NPC can actually path onto the stand tile from the open side
+    /// instead of a walkable tile walled in by other trees/objects.
+    /// </summary>
+    private static bool HasOpenApproach(GameLocation location, ActionTile stand, ActionTile target)
+    {
+        int beyondX = stand.X + (stand.X - target.X);
+        int beyondY = stand.Y + (stand.Y - target.Y);
+        return IsWalkable(location, new ActionTile(beyondX, beyondY));
     }
 
     private static bool IsWalkable(GameLocation location, ActionTile tile)
