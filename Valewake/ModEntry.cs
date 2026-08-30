@@ -132,13 +132,23 @@ public sealed class ModEntry : Mod
     {
         RegisterGenericModConfigMenu();
         Monitor.Log($"Agent backend configured at: {Config.BackendUrl}", LogLevel.Info);
-        _ = EnsureBackendReadyAsync();
+        // Persist config.json -> Backend/llm_config.json before the backend starts, so a
+        // manually-edited config.json (full API key pasted with Notepad) is picked up.
+        WriteLlmConfigFile();
+        LogLlmKeySummary();
+        _ = EnsureBackendReadyAndSyncConfigAsync();
     }
 
-    private async Task EnsureBackendReadyAsync()
+    private async Task EnsureBackendReadyAndSyncConfigAsync()
     {
         if (backendProcessManager is not null && !await backendProcessManager.EnsureReadyAsync())
+        {
             Monitor.Log("Agent backend is unavailable. AI chat will retry when the player sends a message.", LogLevel.Warn);
+            return;
+        }
+        // Push the current config to a (possibly already-running) backend so manual
+        // config.json edits apply without restarting the backend.
+        await SyncLlmConfigToBackendAsync();
     }
 
     private void OnGameExiting(object? sender, EventArgs e)
@@ -194,7 +204,7 @@ public sealed class ModEntry : Mod
             () => Config.LlmApiKey,
             value => Config.LlmApiKey = value,
             () => "API Key",
-            () => "填入你的 API Key"
+            () => "填入你的 API Key（输入法请切到英文；若输入不全，直接用记事本改 config.json 里的 LlmApiKey）"
         );
 
         api.AddTextOption(
@@ -227,10 +237,16 @@ public sealed class ModEntry : Mod
         {
             string dir = System.IO.Path.Combine(Helper.DirectoryPath, "Backend");
             System.IO.Directory.CreateDirectory(dir);
+            int providerIndex = Array.FindIndex(LlmProviders, p => p.Id == Config.LlmProvider);
+            if (providerIndex < 0)
+                providerIndex = 0;
+            string apiBase = string.IsNullOrWhiteSpace(Config.LlmApiBase)
+                ? LlmProviders[providerIndex].Url
+                : Config.LlmApiBase;
             var payload = new Dictionary<string, string>
             {
-                ["llm_backend"] = LlmProviders[Array.FindIndex(LlmProviders, p => p.Id == Config.LlmProvider)].Format,
-                ["llm_api_base"] = Config.LlmApiBase,
+                ["llm_backend"] = LlmProviders[providerIndex].Format,
+                ["llm_api_base"] = apiBase,
                 ["llm_api_key"] = Config.LlmApiKey,
                 ["llm_model"] = Config.LlmModel,
             };
@@ -246,6 +262,16 @@ public sealed class ModEntry : Mod
         {
             Monitor.Log($"Failed to write LLM config file: {ex.Message}", LogLevel.Warn);
         }
+    }
+
+    private void LogLlmKeySummary()
+    {
+        string key = Config.LlmApiKey ?? "";
+        string suffix = key.Length >= 4 ? key.Substring(key.Length - 4) : key;
+        Monitor.Log(
+            $"LLM config: provider={Config.LlmProvider}, model={Config.LlmModel}, api_key length={key.Length} (ends '...{suffix}').",
+            LogLevel.Info
+        );
     }
 
     private async Task SyncLlmConfigToBackendAsync()
