@@ -37,6 +37,12 @@ class PersonaRegistry:
             if isinstance(profile, dict)
         }
 
+    _NAME_ALIASES: dict[str, str] = {
+        "morristod": "morris",
+        "mrqi": "mr qi",
+        "mr. qi": "mr qi",
+    }
+
     def get(
         self,
         npc_name: str,
@@ -44,7 +50,8 @@ class PersonaRegistry:
         runtime_age_group: str = "",
     ) -> dict[str, Any]:
         resolved_name = (npc_name or display_name or "Villager").strip()
-        stored = self.profiles.get(resolved_name.lower(), {})
+        lookup_name = self._NAME_ALIASES.get(resolved_name.lower(), resolved_name)
+        stored = self.profiles.get(lookup_name.lower(), {})
         stored_boundaries = stored.get("boundaries")
         boundaries = list(DEFAULT_PROFILE["boundaries"])
         if isinstance(stored_boundaries, list):

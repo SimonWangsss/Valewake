@@ -551,7 +551,8 @@ class StardewAgent:
             generation["action_proposal"] = forced_action_proposal(
                 action, player_input, "refuse", "model_returned_no_action_decision"
             )
-            generation["reply"] = localized_uncertain_action_reply(player_input)
+            if not str(generation.get("reply", "")).strip():
+                generation["reply"] = localized_uncertain_action_reply(player_input)
         return generation
 
     @staticmethod

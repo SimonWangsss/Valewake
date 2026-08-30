@@ -181,7 +181,9 @@ class MemoryStore:
                         item["updated_at"] = now
                         superseded_id = str(item.get("id", ""))
                         continue
-                    if score_text(text, str(item.get("text", ""))) >= 0.78:
+                    prior_source = str(item.get("source", ""))
+                    cross_source = bool(source and prior_source and source != prior_source)
+                    if cross_source or score_text(text, str(item.get("text", ""))) >= 0.78:
                         item["reinforcement_count"] = int(
                             item.get("reinforcement_count", 1)
                         ) + 1
@@ -560,6 +562,11 @@ def canonical_memory_key(text: str, kind: str) -> str:
         "hot_cocoa": ("hot cocoa", "可可"),
         "money": ("money", "gold", "profit", "赚钱", "金币"),
         "adventure": ("adventure", "explore", "冒险", "探索"),
+        "smoking": ("smoking", "smoke", "抽烟", "吸烟"),
+        "music": ("music", "song", "guitar", "音乐", "歌", "曲子"),
+        "pets": ("dog", "cat", "pet", "狗", "猫", "宠物"),
+        "exercise": ("exercise", "workout", "gym", "锻炼", "健身", "跑步"),
+        "food": ("food", "dish", "cook", "pizza", "食物", "菜", "披萨"),
     }
     for topic, markers in topic_markers.items():
         if any(normalize_text(marker) in normalized for marker in markers):
