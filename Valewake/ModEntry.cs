@@ -173,7 +173,14 @@ public sealed class ModEntry : Mod
         IGenericModConfigMenuApi? api =
             Helper.ModRegistry.GetApi<IGenericModConfigMenuApi>("spacechase0.GenericModConfigMenu");
         if (api is null)
+        {
+            Monitor.Log(
+                "Generic Mod Config Menu (GMCM) is not installed or its API is incompatible. " +
+                "Install/update GMCM to configure in-game, or edit config.json directly.",
+                LogLevel.Warn
+            );
             return;
+        }
 
         api.Register(
             ModManifest,
@@ -229,6 +236,8 @@ public sealed class ModEntry : Mod
             value => Config.DebugLogging = value,
             () => "调试日志"
         );
+
+        Monitor.Log("Valewake settings registered in Generic Mod Config Menu.", LogLevel.Info);
     }
 
     private void WriteLlmConfigFile()
