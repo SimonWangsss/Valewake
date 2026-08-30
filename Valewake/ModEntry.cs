@@ -193,17 +193,24 @@ public sealed class ModEntry : Mod
             }
         );
 
-        api.AddDropdownOption(
+        api.AddTextOption(
             ModManifest,
-            () => Array.FindIndex(LlmProviders, p => p.Id == Config.LlmProvider),
+            () => Config.LlmProvider,
             value =>
             {
-                Config.LlmProvider = LlmProviders[value].Id;
-                Config.LlmApiBase = LlmProviders[value].Url;
+                Config.LlmProvider = value;
+                int providerIndex = Array.FindIndex(LlmProviders, p => p.Id == value);
+                if (providerIndex >= 0)
+                    Config.LlmApiBase = LlmProviders[providerIndex].Url;
             },
-            () => LlmProviders.Select(p => p.Name).ToArray(),
             () => "LLM 服务商",
-            () => "选择后自动带出官方地址，无需手填 URL"
+            () => "选择后自动带出官方地址，无需手填 URL",
+            LlmProviders.Select(p => p.Id).ToArray(),
+            value =>
+            {
+                int providerIndex = Array.FindIndex(LlmProviders, p => p.Id == value);
+                return providerIndex >= 0 ? LlmProviders[providerIndex].Name : value;
+            }
         );
 
         api.AddTextOption(

@@ -5,12 +5,13 @@ namespace Valewake;
 
 /// <summary>
 /// Minimal subset of the Generic Mod Config Menu (GMCM) API surface that Valewake
-/// uses. We declare the oldest stable signatures (no fieldId / titleScreenOnly) so
-/// the signature-based binding matches both old and new GMCM versions.
+/// uses. Signatures mirror GMCM's IGenericModConfigMenuApi exactly (SMAPI's Pintail
+/// binder matches by exact parameter list). GMCM has no AddDropdownOption: dropdowns
+/// are expressed as AddTextOption with an allowedValues array.
 /// </summary>
 public interface IGenericModConfigMenuApi
 {
-    void Register(IManifest mod, Action reset, Action save);
+    void Register(IManifest mod, Action reset, Action save, bool titleScreenOnly = false);
 
     void AddTextOption(
         IManifest mod,
@@ -19,16 +20,8 @@ public interface IGenericModConfigMenuApi
         Func<string> name,
         Func<string>? tooltip = null,
         string[]? allowedValues = null,
-        Func<string, string>? formatAllowedValue = null
-    );
-
-    void AddDropdownOption(
-        IManifest mod,
-        Func<int> getValue,
-        Action<int> setValue,
-        Func<string[]> values,
-        Func<string> name,
-        Func<string>? tooltip = null
+        Func<string, string>? formatAllowedValue = null,
+        string? fieldId = null
     );
 
     void AddBoolOption(
@@ -36,18 +29,7 @@ public interface IGenericModConfigMenuApi
         Func<bool> getValue,
         Action<bool> setValue,
         Func<string> name,
-        Func<string>? tooltip = null
-    );
-
-    void AddNumberOption(
-        IManifest mod,
-        Func<int> getValue,
-        Action<int> setValue,
-        Func<string> name,
         Func<string>? tooltip = null,
-        int? min = null,
-        int? max = null,
-        int? interval = null,
-        Func<int, string>? formatValue = null
+        string? fieldId = null
     );
 }
