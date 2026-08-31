@@ -619,7 +619,7 @@ public sealed class ModEntry : Mod
         {
             PlayerInput = playerInput,
             GameState = gameState,
-            SessionId = $"{Constants.SaveFolderName}:{npc.Name}",
+            SessionId = $"{Constants.SaveFolderName}:{NpcNameMap.Canonical(npc.Name)}",
             ConversationHistory = recentHistory
                 .TakeLast(Math.Max(2, Config.MaxConversationHistoryMessages))
                 .ToList(),

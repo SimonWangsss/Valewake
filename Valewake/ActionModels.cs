@@ -20,6 +20,28 @@ public static class ActionIds
         JoinMineExpedition or DefendPlayer or MineTarget or MineNearby or MineExpedition;
 }
 
+/// <summary>
+/// Maps a game NPC's internal name to a stable canonical name so that the same
+/// person in different game states (for example Morris vs MorrisTod, or Mr Qi vs
+/// MrQi) shares memory, persona, and other per-character state instead of being
+/// treated as two strangers.
+/// </summary>
+public static class NpcNameMap
+{
+    private static readonly Dictionary<string, string> Aliases =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["MorrisTod"] = "Morris",
+            ["MrQi"] = "Mr Qi",
+        };
+
+    public static string Canonical(string name)
+    {
+        string trimmed = (name ?? "").Trim();
+        return Aliases.TryGetValue(trimmed, out string? canonical) ? canonical : trimmed;
+    }
+}
+
 public static class ActionJobStates
 {
     public const string Accepted = "accepted";

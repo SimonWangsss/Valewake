@@ -98,6 +98,10 @@ public sealed class MeetingManager
         if (relationship.Trust < config.MinimumActionTrust)
             return ActionProposalDecision.Reject($"Scheduling a meeting requires at least {config.MinimumActionTrust} Valewake trust.");
 
+        int dayOffset = Math.Max(1, GetMeetingDayOffset(proposal));
+        if (IsFestivalDay(Game1.Date.TotalDays + dayOffset))
+            return ActionProposalDecision.Reject($"那天有节日，{npc.displayName} 可能没空，改天再约吧。");
+
         string location = GetMeetingLocation(proposal);
         int time = GetMeetingTime(proposal);
         string topic = GetMeetingTopic(proposal);
@@ -152,6 +156,8 @@ public sealed class MeetingManager
                 }
                 else if (Game1.Date.TotalDays == meeting.Day && Game1.timeOfDay >= meeting.Time)
                 {
+                    if (IsFestivalActive())
+                        continue; // defer: a festival or event is currently occupying the NPC
                     ActivateMeeting(meeting);
                     changed = true;
                 }
@@ -200,7 +206,9 @@ public sealed class MeetingManager
     private static int GetMeetingTime(AgentActionProposal proposal)
     {
         int time = GetInt(proposal.Parameters, "time_of_day", 1800);
-        return time is >= 600 and < 2400 ? time : 1800;
+        if (time is < 600 or >= 2400)
+            return 1800;
+        return Math.Clamp(time, 800, 2200);
     }
 
     private static int GetMeetingDayOffset(AgentActionProposal proposal) =>
@@ -233,6 +241,40 @@ public sealed class MeetingManager
             return value;
         }
         return fallback;
+    }
+
+    // ---- festival / occupancy helpers ----
+
+    private HashSet<string>? festivalDates;
+
+    private static bool IsFestivalActive() =>
+        Game1.isFestival() || Game1.CurrentEvent is not null || Game1.eventUp;
+
+    private bool IsFestivalDay(int totalDays)
+    {
+        festivalDates ??= LoadFestivalDates();
+        int dayOfYear = totalDays % 112;
+        int seasonIndex = dayOfYear / 28;
+        int dayOfMonth = dayOfYear % 28 + 1;
+        string season = seasonIndex switch { 0 => "spring", 1 => "summer", 2 => "fall", _ => "winter" };
+        return festivalDates.Contains($"{season}_{dayOfMonth}");
+    }
+
+    private static HashSet<string> LoadFestivalDates()
+    {
+        HashSet<string> dates = new(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            Dictionary<string, string> calendar =
+                Game1.content.Load<Dictionary<string, string>>("Data/Festivals/FestivalDates");
+            foreach (string key in calendar.Keys)
+                dates.Add(key);
+        }
+        catch (Exception)
+        {
+            // Festival data unavailable; degrade gracefully (no festival-day gating).
+        }
+        return dates;
     }
 
     // ---- location + formatting helpers ----

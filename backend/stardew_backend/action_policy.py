@@ -330,15 +330,15 @@ def _parse_meeting_time(raw_time: Any, player_input: str) -> int:
         hour = int(clock.group(1))
         minute = int(clock.group(2))
         if 0 <= hour <= 23 and 0 <= minute <= 59:
-            return hour * 100 + minute
+            return _clamp_meeting_time(hour * 100 + minute)
     compact = re.search(r"(?<![\d])([01]?\d)([0-5]\d)(?![\d])", text)
     if compact:
         hour = int(compact.group(1))
         minute = int(compact.group(2))
         if 0 <= hour <= 23 and 0 <= minute <= 59 and (hour >= 6 or hour == 0):
-            return hour * 100 + minute
+            return _clamp_meeting_time(hour * 100 + minute)
     named = (
-        ("\u65e9\u4e0a", 600), ("\u65e9\u6668", 600), ("\u6e05\u6668", 600),
+        ("\u65e9\u4e0a", 800), ("\u65e9\u6668", 800), ("\u6e05\u6668", 800),
         ("\u4e0a\u5348", 1000), ("\u4e2d\u5348", 1200), ("\u4e0b\u5348", 1500),
         ("\u508d\u665a", 1800), ("\u665a\u4e0a", 1900),
         ("morning", 800), ("noon", 1200), ("afternoon", 1500),
@@ -346,7 +346,7 @@ def _parse_meeting_time(raw_time: Any, player_input: str) -> int:
     )
     for marker, value in named:
         if marker in lowered:
-            return value
+            return _clamp_meeting_time(value)
     zh_digits = {"\u4e00": 1, "\u4e8c": 2, "\u4e09": 3, "\u56db": 4, "\u4e94": 5,
                  "\u516d": 6, "\u4e03": 7, "\u516b": 8, "\u4e5d": 9, "\u5341": 10}
     zh_clock = re.search(r"([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3})\u70b9", text)
@@ -358,5 +358,9 @@ def _parse_meeting_time(raw_time: Any, player_input: str) -> int:
         for char in digits:
             value += zh_digits.get(char, 0)
         if 0 < value <= 12:
-            return value * 100
+            return _clamp_meeting_time(value * 100)
     return 1800
+
+
+def _clamp_meeting_time(value: int) -> int:
+    return max(800, min(2200, value))

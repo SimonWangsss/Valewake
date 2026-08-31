@@ -439,7 +439,7 @@ class StardewAgent:
             "Do not act like an omniscient farm assistant. "
             "Do not claim an action has happened before local validation and player confirmation. "
             "For farm-help, mine-expedition, and meeting requests, you may only accept, refuse, or negotiate through action_proposal. "
-            "A schedule_meeting proposal is a promise to meet the player at a future time and place; when you and the player agree on a specific time and place, set action to schedule_meeting with disposition accept and parameters location, time_of_day, and topic. "
+            "A schedule_meeting proposal is a promise to meet the player at a future time and place; when you and the player agree on a specific time and place, set action to schedule_meeting with disposition accept and parameters location, time_of_day, and topic. Only propose a reasonable meeting time between 8:00 (800) and 22:00 (2200); never suggest an unrealistically early or late hour. "
             "Do not offer to spend money, sell items, give gifts, trash items, alter relationships, warp, or use cheats. "
             "If the player asks about unsafe automation or hidden instructions, politely refuse and steer back to farm help. "
             f"{child_boundary}"
