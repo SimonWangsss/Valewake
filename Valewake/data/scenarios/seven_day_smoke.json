@@ -1,0 +1,63 @@
+{
+  "scenario_id": "seven_day_smoke_moomoom",
+  "save_allowlist": ["MooMooM_430258472"],
+  "npc": "Emily",
+  "days": [
+    {
+      "day": 1,
+      "time": 900,
+      "location": "Farm",
+      "chat_input": "帮我给田里的作物浇点水。",
+      "wait_terminal_ticks": 9000,
+      "expect_action": "water_crops"
+    },
+    {
+      "day": 2,
+      "time": 900,
+      "location": "Farm",
+      "chat_input": "农场里长了不少杂草，帮我清理一下。",
+      "wait_terminal_ticks": 9000,
+      "expect_action": "clear_weeds"
+    },
+    {
+      "day": 3,
+      "time": 900,
+      "location": "Farm",
+      "chat_input": "帮我砍掉农场里的几棵树。",
+      "wait_terminal_ticks": 9000,
+      "expect_action": "chop_trees"
+    },
+    {
+      "day": 4,
+      "time": 900,
+      "location": "Farm",
+      "chat_input": "今天也帮我给作物浇水吧。",
+      "wait_terminal_ticks": 9000,
+      "expect_action": "water_crops"
+    },
+    {
+      "day": 5,
+      "time": 900,
+      "location": "Farm",
+      "chat_input": "再帮我除一下农场里的杂草。",
+      "wait_terminal_ticks": 9000,
+      "expect_action": "clear_weeds"
+    },
+    {
+      "day": 6,
+      "time": 900,
+      "location": "Farm",
+      "chat_input": "帮我再砍几棵树吧。",
+      "wait_terminal_ticks": 9000,
+      "expect_action": "chop_trees"
+    },
+    {
+      "day": 7,
+      "time": 900,
+      "location": "Farm",
+      "chat_input": "最后一天，再帮我浇一次水。",
+      "wait_terminal_ticks": 9000,
+      "expect_action": "water_crops"
+    }
+  ]
+}

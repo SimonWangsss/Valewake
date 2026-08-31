@@ -74,4 +74,15 @@ public sealed class ModConfig
     public int ExpeditionEndTime { get; set; } = 2300;
     public int ExpeditionTargetSnapRadiusTiles { get; set; } = 1;
     public SButton ExpeditionTargetButton { get; set; } = SButton.G;
+
+    // Scenario test runner (Track B). Disabled by default; normal play is unaffected while TestMode=false.
+    public bool TestMode { get; set; } = false;
+    public bool TestAutoRun { get; set; } = false;
+    public bool TestAutoConfirm { get; set; } = true;
+    public string TestAutoLoadSave { get; set; } = "";
+    public string TestScenarioFile { get; set; } = "data/scenarios/seven_day_smoke.json";
+    public string[] TestSaveAllowlist { get; set; } = Array.Empty<string>();
+    public string[] TestSaveQueue { get; set; } = Array.Empty<string>();
+    public int TestWaitTerminalTicks { get; set; } = 7200;
+    public bool TestAutoExitAfterRun { get; set; } = false;
 }

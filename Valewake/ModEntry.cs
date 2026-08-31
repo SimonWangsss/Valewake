@@ -22,6 +22,7 @@ public sealed class ModEntry : Mod
     private ActionJobManager? actionJobManager;
     private MineExpeditionManager? mineExpeditionManager;
     private MeetingManager? meetingManager;
+    private ScenarioRunner? scenarioRunner;
     private readonly ConcurrentQueue<Action> mainThreadActions = new();
     private readonly List<AgentConversationMessage> conversationHistory = new();
     private Task memorySessionReady = Task.CompletedTask;
@@ -31,6 +32,9 @@ public sealed class ModEntry : Mod
     private int pendingVanillaStartedTick;
     private string pendingVanillaLine = "";
     private string lastTurnId = "";
+    private bool testAutoLoadDone;
+    private int testAutoLoadCounter;
+    private int testSaveQueueIndex;
 
     public override void Entry(IModHelper helper)
     {
@@ -49,6 +53,14 @@ public sealed class ModEntry : Mod
         actionJobManager = new ActionJobManager(helper, Monitor, Config);
         mineExpeditionManager = new MineExpeditionManager(helper, Monitor, Config);
         meetingManager = new MeetingManager(helper, Monitor, Config);
+        scenarioRunner = new ScenarioRunner(
+            helper,
+            Monitor,
+            Config,
+            actionJobManager,
+            mineExpeditionManager,
+            (npc, input) => SendChatToBackendAsync(input, npc, Array.Empty<AgentConversationMessage>(), false)
+        );
 
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
@@ -177,6 +189,59 @@ public sealed class ModEntry : Mod
     {
         backendClient?.Dispose();
         backendProcessManager?.Dispose();
+    }
+
+    private void TryAutoLoadTestSave()
+    {
+        if (!Config.TestMode || testAutoLoadDone)
+            return;
+        string? save = GetNextTestSave();
+        if (string.IsNullOrWhiteSpace(save))
+            return;
+        if (Context.IsWorldReady || Game1.activeClickableMenu is not TitleMenu)
+            return;
+        testAutoLoadCounter++;
+        if (testAutoLoadCounter < 180)
+            return;
+        testAutoLoadDone = true;
+        try
+        {
+            Game1.activeClickableMenu = null;
+            SaveGame.Load(save);
+            Monitor.Log($"TestMode: auto-loading save '{save}'...", LogLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"TestMode: auto-load failed: {ex.Message}", LogLevel.Error);
+        }
+    }
+
+    private string? GetNextTestSave()
+    {
+        if (Config.TestSaveQueue.Length > 0)
+        {
+            return testSaveQueueIndex < Config.TestSaveQueue.Length
+                ? Config.TestSaveQueue[testSaveQueueIndex]
+                : null;
+        }
+        return string.IsNullOrWhiteSpace(Config.TestAutoLoadSave) ? null : Config.TestAutoLoadSave;
+    }
+
+    private void TryAdvanceTestSaveQueue()
+    {
+        if (!Config.TestMode || scenarioRunner is null || !scenarioRunner.IsDone)
+            return;
+
+        scenarioRunner.OnReturnedToTitle();
+        if (Config.TestSaveQueue.Length == 0 || testSaveQueueIndex >= Config.TestSaveQueue.Length - 1)
+        {
+            Monitor.Log("TestMode: all queued saves completed.", LogLevel.Info);
+            return;
+        }
+
+        testSaveQueueIndex++;
+        Monitor.Log($"TestMode: advancing to next save '{Config.TestSaveQueue[testSaveQueueIndex]}'.", LogLevel.Info);
+        Game1.ExitToTitle();
     }
 
     private static readonly (string Id, string Name, string Url, string Format)[] LlmProviders =
@@ -342,6 +407,7 @@ public sealed class ModEntry : Mod
         actionJobManager?.Load();
         mineExpeditionManager?.Load();
         meetingManager?.Load();
+        scenarioRunner?.OnSaveLoaded();
         Monitor.Log($"Save loaded for {Game1.player.Name} on {Game1.player.farmName.Value} Farm.", LogLevel.Info);
         LogSnapshot("Initial save snapshot");
     }
@@ -353,11 +419,14 @@ public sealed class ModEntry : Mod
 
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
     {
+        scenarioRunner?.OnDayStarted();
         LogSnapshot("Day started");
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
+        TryAutoLoadTestSave();
+
         while (mainThreadActions.TryDequeue(out Action? action))
         {
             try
@@ -373,6 +442,8 @@ public sealed class ModEntry : Mod
         actionJobManager?.Update();
         mineExpeditionManager?.Update();
         meetingManager?.Update();
+        scenarioRunner?.OnUpdateTicked();
+        TryAdvanceTestSaveQueue();
 
         if (pendingVanillaNpc is not null &&
             !pendingVanillaDialogueSeen &&
@@ -406,6 +477,9 @@ public sealed class ModEntry : Mod
 
     private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
     {
+        scenarioRunner?.OnReturnedToTitle();
+        testAutoLoadDone = false;
+        testAutoLoadCounter = 0;
         string saveFolder = Constants.SaveFolderName ?? "";
         if (!string.IsNullOrWhiteSpace(saveFolder))
             _ = RollbackMemoryAsync($"{saveFolder}:", "save_rolled_back");
@@ -718,6 +792,21 @@ public sealed class ModEntry : Mod
                     );
                 }
 
+                if (Config.TestMode && Config.TestAutoConfirm && scenarioRunner is not null && scenarioRunner.IsRunning)
+                {
+                    bool accepted = response.ActionProposal is not null && actionDecision?.Allowed == true;
+                    if (accepted)
+                        AcceptProposal(currentNpc, response.ActionProposal!, actionDecision!, response.TurnId);
+                    scenarioRunner.NotifyChatResult(
+                        currentNpc.Name,
+                        response.TurnId,
+                        response.Reply,
+                        response.ActionProposal?.Action ?? "",
+                        accepted
+                    );
+                    return;
+                }
+
                 Action? afterDialogue = continueConversation && IsActiveChatNpc(currentNpc)
                     ? () => OpenChatInput(currentNpc)
                     : null;
@@ -833,6 +922,45 @@ public sealed class ModEntry : Mod
         {
             Monitor.Log($"Could not roll back AI memory: {ex.Message}", LogLevel.Warn);
         }
+    }
+
+    private void AcceptProposal(
+        NPC npc,
+        AgentActionProposal proposal,
+        ActionProposalDecision decision,
+        string sourceTurnId)
+    {
+        bool isMineAction = ActionIds.IsMineAction(proposal.Action);
+        bool isMeeting = proposal.Action == ActionIds.ScheduleMeeting;
+        if (!Context.IsWorldReady ||
+            (isMineAction ? mineExpeditionManager is null
+             : isMeeting ? meetingManager is null
+             : actionJobManager is null))
+            return;
+
+        if (isMineAction)
+        {
+            mineExpeditionManager!.TraceConfirmation(proposal, npc, true, sourceTurnId);
+            bool upgraded = mineExpeditionManager!.HasActiveExpedition;
+            MineExpedition expedition = mineExpeditionManager!.Accept(proposal, npc, decision, sourceTurnId);
+            Game1.addHUDMessage(new HUDMessage(
+                upgraded
+                    ? $"已为 {npc.displayName} 的同行任务追加能力：{proposal.Action}。"
+                    : $"{npc.displayName} 已加入矿洞同行，将自动跟随、挖矿并防御。按 {Config.ExpeditionTargetButton} 可优先指定矿石。"
+            ));
+        }
+        else if (isMeeting)
+        {
+            meetingManager!.Accept(proposal, npc, decision, sourceTurnId);
+            Game1.addHUDMessage(new HUDMessage($"已和 {npc.displayName} 约好见面，到时会通知你。"));
+        }
+        else
+        {
+            actionJobManager!.TraceConfirmation(proposal, npc, true, sourceTurnId);
+            ActionJob job = actionJobManager!.Accept(proposal, npc, decision, sourceTurnId);
+            Game1.addHUDMessage(new HUDMessage($"{npc.displayName} accepted the job ({job.MaxTargets} max)."));
+        }
+        EndChatSession();
     }
 
     private void ShowActionConfirmation(

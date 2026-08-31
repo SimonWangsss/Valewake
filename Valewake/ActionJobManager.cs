@@ -62,6 +62,12 @@ public sealed class ActionJobManager
 
     public bool HasActiveJob(string npcName) => GetActiveJob(npcName) is not null;
 
+    public ActionJob? GetLastJob(string npcName) =>
+        data.Jobs
+            .Where(job => job.NpcName == npcName && job.CreatedDay == Game1.Date.TotalDays)
+            .OrderByDescending(job => job.AcceptedTick)
+            .FirstOrDefault();
+
     public ActionProposalDecision Evaluate(
         AgentActionProposal proposal,
         NPC npc,
