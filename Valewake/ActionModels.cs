@@ -14,6 +14,7 @@ public static class ActionIds
     public const string MineTarget = "mine_target";
     public const string MineNearby = "mine_nearby";
     public const string MineExpedition = "mine_expedition";
+    public const string ScheduleMeeting = "schedule_meeting";
 
     public static bool IsMineAction(string action) => action is
         JoinMineExpedition or DefendPlayer or MineTarget or MineNearby or MineExpedition;

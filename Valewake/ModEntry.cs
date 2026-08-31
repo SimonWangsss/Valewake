@@ -21,6 +21,7 @@ public sealed class ModEntry : Mod
     private RelationshipManager? relationshipManager;
     private ActionJobManager? actionJobManager;
     private MineExpeditionManager? mineExpeditionManager;
+    private MeetingManager? meetingManager;
     private readonly ConcurrentQueue<Action> mainThreadActions = new();
     private readonly List<AgentConversationMessage> conversationHistory = new();
     private Task memorySessionReady = Task.CompletedTask;
@@ -47,6 +48,7 @@ public sealed class ModEntry : Mod
         relationshipManager = new RelationshipManager(helper, Monitor, Config);
         actionJobManager = new ActionJobManager(helper, Monitor, Config);
         mineExpeditionManager = new MineExpeditionManager(helper, Monitor, Config);
+        meetingManager = new MeetingManager(helper, Monitor, Config);
 
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
@@ -339,6 +341,7 @@ public sealed class ModEntry : Mod
         relationshipManager?.Load();
         actionJobManager?.Load();
         mineExpeditionManager?.Load();
+        meetingManager?.Load();
         Monitor.Log($"Save loaded for {Game1.player.Name} on {Game1.player.farmName.Value} Farm.", LogLevel.Info);
         LogSnapshot("Initial save snapshot");
     }
@@ -369,6 +372,7 @@ public sealed class ModEntry : Mod
 
         actionJobManager?.Update();
         mineExpeditionManager?.Update();
+        meetingManager?.Update();
 
         if (pendingVanillaNpc is not null &&
             !pendingVanillaDialogueSeen &&
@@ -675,6 +679,23 @@ public sealed class ModEntry : Mod
                         response.TurnId
                     );
                 }
+                else if (response.ActionProposal is not null &&
+                         response.ActionProposal.Action == ActionIds.ScheduleMeeting &&
+                         meetingManager is not null)
+                {
+                    actionDecision = meetingManager.Evaluate(
+                        response.ActionProposal,
+                        currentNpc,
+                        playerInput,
+                        relationshipManager?.GetContext(currentNpc.Name) ?? new AgentRelationshipContext()
+                    );
+                    Monitor.Log(
+                        actionDecision.Allowed
+                            ? $"Meeting proposal validated: {response.ActionProposal.Action}"
+                            : $"Meeting proposal rejected: {actionDecision.Message}",
+                        actionDecision.Allowed ? LogLevel.Info : LogLevel.Warn
+                    );
+                }
                 else if (response.ActionProposal is not null && actionJobManager is not null)
                 {
                     actionDecision = actionJobManager.Evaluate(
@@ -822,7 +843,11 @@ public sealed class ModEntry : Mod
         string sourceTurnId)
     {
         bool isMineAction = ActionIds.IsMineAction(proposal.Action);
-        if (!Context.IsWorldReady || (isMineAction ? mineExpeditionManager is null : actionJobManager is null))
+        bool isMeeting = proposal.Action == ActionIds.ScheduleMeeting;
+        if (!Context.IsWorldReady ||
+            (isMineAction ? mineExpeditionManager is null
+             : isMeeting ? meetingManager is null
+             : actionJobManager is null))
             return;
 
         Game1.currentLocation.createQuestionDialogue(
@@ -831,10 +856,13 @@ public sealed class ModEntry : Mod
             (_, answer) =>
             {
                 bool confirmed = string.Equals(answer, "Yes", StringComparison.OrdinalIgnoreCase);
-                if (isMineAction)
-                    mineExpeditionManager!.TraceConfirmation(proposal, npc, confirmed, sourceTurnId);
-                else
-                    actionJobManager!.TraceConfirmation(proposal, npc, confirmed, sourceTurnId);
+                if (!isMeeting)
+                {
+                    if (isMineAction)
+                        mineExpeditionManager!.TraceConfirmation(proposal, npc, confirmed, sourceTurnId);
+                    else
+                        actionJobManager!.TraceConfirmation(proposal, npc, confirmed, sourceTurnId);
+                }
                 if (confirmed)
                 {
                     if (isMineAction)
@@ -845,6 +873,13 @@ public sealed class ModEntry : Mod
                             upgraded
                                 ? $"已为 {npc.displayName} 的同行任务追加能力：{proposal.Action}。"
                                 : $"{npc.displayName} 已加入矿洞同行，将自动跟随、挖矿并防御。按 {Config.ExpeditionTargetButton} 可优先指定矿石。"
+                        ));
+                    }
+                    else if (isMeeting)
+                    {
+                        meetingManager!.Accept(proposal, npc, decision, sourceTurnId);
+                        Game1.addHUDMessage(new HUDMessage(
+                            $"已和 {npc.displayName} 约好见面，到时会通知你。"
                         ));
                     }
                     else

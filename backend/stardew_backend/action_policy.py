@@ -1,14 +1,16 @@
+import re
 from typing import Any
 from uuid import uuid4
 
 
 SUPPORTED_ACTIONS = {
     "water_crops", "clear_weeds", "chop_trees", "join_mine_expedition", "defend_player",
-    "mine_target", "mine_nearby", "mine_expedition",
+    "mine_target", "mine_nearby", "mine_expedition", "schedule_meeting",
 }
 
 FARM_ACTIONS = {"water_crops", "clear_weeds", "chop_trees"}
-MINE_ACTIONS = SUPPORTED_ACTIONS - FARM_ACTIONS
+MINE_ACTIONS = {"join_mine_expedition", "defend_player", "mine_target", "mine_nearby", "mine_expedition"}
+MEETING_ACTIONS = {"schedule_meeting"}
 
 
 def action_eligibility(action: str, game_state: dict[str, Any]) -> dict[str, Any]:
@@ -30,6 +32,7 @@ def action_eligibility(action: str, game_state: dict[str, Any]) -> dict[str, Any
         trust = 0
 
     is_mine = action in MINE_ACTIONS
+    is_meeting = action in MEETING_ACTIONS
     minimum_hearts = int(rules.get(
         "minimum_expedition_hearts" if is_mine else "minimum_farm_hearts",
         4 if is_mine else 2,
@@ -55,7 +58,7 @@ def action_eligibility(action: str, game_state: dict[str, Any]) -> dict[str, Any
         reason_code = "event_active"
     elif bool(rules.get("npc_is_child", False)):
         reason_code = "child_npc"
-    elif current_time >= end_time:
+    elif not is_meeting and current_time >= end_time:
         reason_code = "too_late"
     elif hearts < minimum_hearts:
         reason_code = "insufficient_hearts"
@@ -109,6 +112,12 @@ ACTION_ALIASES = {
     "mine_target": "mine_target",
     "mine_nearby": "mine_nearby",
     "mine_expedition": "mine_expedition",
+    "schedule_meeting": "schedule_meeting",
+    "meet_up": "schedule_meeting",
+    "meeting": "schedule_meeting",
+    "appointment": "schedule_meeting",
+    "\u89c1\u9762": "schedule_meeting",
+    "\u7ea6\u4f1a": "schedule_meeting",
 }
 
 
@@ -185,6 +194,34 @@ def requested_action(player_input: str) -> str:
         )
     ):
         return "clear_weeds"
+    meeting_agreement = (
+        "\u8bf4\u5b9a", "\u7ea6\u597d", "\u4e0d\u89c1\u4e0d\u6563", "\u5230\u65f6\u5019\u89c1",
+        "\u4e00\u8a00\u4e3a\u5b9a",
+        "it's a date", "let's meet", "meet me", "see you then", "deal",
+    )
+    meeting_time = (
+        "\u660e\u5929", "\u540e\u5929", "\u4eca\u665a", "\u660e\u665a", "\u65e9\u4e0a", "\u65e9\u6668",
+        "\u508d\u665a", "\u665a\u4e0a", "\u4e0b\u5348", "\u4e2d\u5348", "\u70b9", "\u65f6",
+        "tomorrow", "tonight", "morning", "evening", "afternoon", "noon",
+    )
+    meeting_place = (
+        "\u6d77\u8fb9", "\u6d77\u6ee9", "\u5c71\u4e0a", "\u68ee\u6797", "\u9547\u4e0a", "\u519c\u573a",
+        "\u77ff\u6d1e", "\u9152\u9986", "\u9152\u5427", "\u6742\u8d27\u5e97", "\u5e97",
+        "beach", "mountain", "forest", "town", "farm", "mine", "saloon",
+    )
+    meeting_verb = (
+        "\u89c1", "\u627e", "\u7b49", "\u7ea6", "\u4e00\u8d77", "\u78b0\u5934", "\u78b0\u9762",
+        "meet", "together",
+    )
+    if any(marker in lowered for marker in meeting_agreement):
+        return "schedule_meeting"
+    if (any(marker in lowered for marker in meeting_time)
+            and "\u4e00\u8d77" in lowered):
+        return "schedule_meeting"
+    if (any(marker in lowered for marker in meeting_time)
+            and any(marker in lowered for marker in meeting_place)
+            and any(marker in lowered for marker in meeting_verb)):
+        return "schedule_meeting"
     return ""
 
 
@@ -241,6 +278,32 @@ def normalize_action_proposal(
             evidence = player_input.strip()[:160]
         confidence = max(confidence, 0.8)
 
+    if action == "schedule_meeting":
+        meeting_location = str(parameters.get("location") or "").strip()
+        meeting_time = _parse_meeting_time(
+            parameters.get("time_of_day") or parameters.get("time"),
+            player_input,
+        )
+        meeting_topic = str(parameters.get("topic") or "").strip()[:120]
+        if not meeting_topic:
+            meeting_topic = player_input.strip()[:120]
+        return {
+            "proposal_id": str(value.get("proposal_id") or f"proposal_{uuid4().hex[:12]}"),
+            "intent": "request_help",
+            "action": action,
+            "disposition": disposition,
+            "parameters": {
+                "location": meeting_location,
+                "time_of_day": meeting_time,
+                "day_offset": 1,
+                "topic": meeting_topic,
+            },
+            "confidence": confidence,
+            "reason": str(value.get("reason") or "")[:240],
+            "evidence": evidence,
+            "requires_confirmation": True,
+        }
+
     return {
         "proposal_id": str(value.get("proposal_id") or f"proposal_{uuid4().hex[:12]}"),
         "intent": "request_help",
@@ -257,3 +320,43 @@ def normalize_action_proposal(
         "evidence": evidence,
         "requires_confirmation": True,
     }
+
+
+def _parse_meeting_time(raw_time: Any, player_input: str) -> int:
+    text = str(raw_time or "").strip() or (player_input or "")
+    lowered = text.lower()
+    clock = re.search(r"(\d{1,2})[:：](\d{2})", text)
+    if clock:
+        hour = int(clock.group(1))
+        minute = int(clock.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour * 100 + minute
+    compact = re.search(r"(?<![\d])([01]?\d)([0-5]\d)(?![\d])", text)
+    if compact:
+        hour = int(compact.group(1))
+        minute = int(compact.group(2))
+        if 0 <= hour <= 23 and 0 <= minute <= 59 and (hour >= 6 or hour == 0):
+            return hour * 100 + minute
+    named = (
+        ("\u65e9\u4e0a", 600), ("\u65e9\u6668", 600), ("\u6e05\u6668", 600),
+        ("\u4e0a\u5348", 1000), ("\u4e2d\u5348", 1200), ("\u4e0b\u5348", 1500),
+        ("\u508d\u665a", 1800), ("\u665a\u4e0a", 1900),
+        ("morning", 800), ("noon", 1200), ("afternoon", 1500),
+        ("evening", 1800), ("night", 2000),
+    )
+    for marker, value in named:
+        if marker in lowered:
+            return value
+    zh_digits = {"\u4e00": 1, "\u4e8c": 2, "\u4e09": 3, "\u56db": 4, "\u4e94": 5,
+                 "\u516d": 6, "\u4e03": 7, "\u516b": 8, "\u4e5d": 9, "\u5341": 10}
+    zh_clock = re.search(r"([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]{1,3})\u70b9", text)
+    if zh_clock:
+        digits = zh_clock.group(1)
+        if digits == "\u5341":
+            return 1000
+        value = 0
+        for char in digits:
+            value += zh_digits.get(char, 0)
+        if 0 < value <= 12:
+            return value * 100
+    return 1800
