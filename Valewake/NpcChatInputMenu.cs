@@ -19,11 +19,12 @@ public sealed class NpcChatInputMenu : IClickableMenu
     private readonly Action<string> onSubmit;
     private readonly Action onCancel;
     private readonly TextBox textBox;
+    private readonly SdlImeBridge imeBridge;
     private readonly ClickableTextureComponent sendButton;
     private readonly ClickableTextureComponent endButton;
     private bool completed;
 
-    public NpcChatInputMenu(NPC npc, Action<string> onSubmit, Action onCancel)
+    public NpcChatInputMenu(NPC npc, Action<string> onSubmit, Action onCancel, bool enableNativeImeCandidateWindow)
     {
         this.npc = npc;
         this.onSubmit = onSubmit;
@@ -43,8 +44,11 @@ public sealed class NpcChatInputMenu : IClickableMenu
             Height = 64,
             limitWidth = true
         };
-        textBox.OnEnterPressed += _ => Submit();
+        // Enter is submitted through ModEntry's SMAPI input handler so the key can
+        // be suppressed before it reaches the game's fullscreen shortcut logic.
         textBox.SelectMe();
+        imeBridge = new SdlImeBridge(enableNativeImeCandidateWindow);
+        UpdateImeCandidatePosition();
 
         sendButton = new ClickableTextureComponent(
             new Rectangle(xPositionOnScreen + width - Margin - ButtonSize, textBox.Y, ButtonSize, ButtonSize),
@@ -71,6 +75,7 @@ public sealed class NpcChatInputMenu : IClickableMenu
     {
         base.update(time);
         textBox.Update();
+        UpdateImeCandidatePosition();
     }
 
     public override void receiveLeftClick(int x, int y, bool playSound = true)
@@ -86,7 +91,10 @@ public sealed class NpcChatInputMenu : IClickableMenu
             return;
         }
         if (new Rectangle(textBox.X, textBox.Y, textBox.Width, textBox.Height).Contains(x, y))
+        {
             textBox.SelectMe();
+            UpdateImeCandidatePosition();
+        }
     }
 
     public override void receiveKeyPress(Keys key)
@@ -94,6 +102,8 @@ public sealed class NpcChatInputMenu : IClickableMenu
         if (key == Keys.Escape)
             Cancel();
     }
+
+    public void SubmitFromKeyboard() => Submit();
 
     public override void performHoverAction(int x, int y)
     {
@@ -106,6 +116,7 @@ public sealed class NpcChatInputMenu : IClickableMenu
         textBox.Selected = false;
         if (ReferenceEquals(Game1.keyboardDispatcher.Subscriber, textBox))
             Game1.keyboardDispatcher.Subscriber = null;
+        imeBridge.Dispose();
         base.cleanupBeforeExit();
     }
 
@@ -160,5 +171,10 @@ public sealed class NpcChatInputMenu : IClickableMenu
         Game1.playSound("cancel");
         exitThisMenuNoSound();
         onCancel();
+    }
+
+    private void UpdateImeCandidatePosition()
+    {
+        imeBridge.Update(new Rectangle(textBox.X, textBox.Y, textBox.Width, textBox.Height));
     }
 }

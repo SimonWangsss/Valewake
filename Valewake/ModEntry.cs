@@ -22,7 +22,6 @@ public sealed class ModEntry : Mod
     private ActionJobManager? actionJobManager;
     private MineExpeditionManager? mineExpeditionManager;
     private MeetingManager? meetingManager;
-    private ScenarioRunner? scenarioRunner;
     private readonly ConcurrentQueue<Action> mainThreadActions = new();
     private readonly List<AgentConversationMessage> conversationHistory = new();
     private Task memorySessionReady = Task.CompletedTask;
@@ -32,9 +31,6 @@ public sealed class ModEntry : Mod
     private int pendingVanillaStartedTick;
     private string pendingVanillaLine = "";
     private string lastTurnId = "";
-    private bool testAutoLoadDone;
-    private int testAutoLoadCounter;
-    private int testSaveQueueIndex;
 
     public override void Entry(IModHelper helper)
     {
@@ -53,14 +49,6 @@ public sealed class ModEntry : Mod
         actionJobManager = new ActionJobManager(helper, Monitor, Config);
         mineExpeditionManager = new MineExpeditionManager(helper, Monitor, Config);
         meetingManager = new MeetingManager(helper, Monitor, Config);
-        scenarioRunner = new ScenarioRunner(
-            helper,
-            Monitor,
-            Config,
-            actionJobManager,
-            mineExpeditionManager,
-            (npc, input) => SendChatToBackendAsync(input, npc, Array.Empty<AgentConversationMessage>(), false)
-        );
 
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
@@ -191,59 +179,6 @@ public sealed class ModEntry : Mod
         backendProcessManager?.Dispose();
     }
 
-    private void TryAutoLoadTestSave()
-    {
-        if (!Config.TestMode || testAutoLoadDone)
-            return;
-        string? save = GetNextTestSave();
-        if (string.IsNullOrWhiteSpace(save))
-            return;
-        if (Context.IsWorldReady || Game1.activeClickableMenu is not TitleMenu)
-            return;
-        testAutoLoadCounter++;
-        if (testAutoLoadCounter < 180)
-            return;
-        testAutoLoadDone = true;
-        try
-        {
-            Game1.activeClickableMenu = null;
-            SaveGame.Load(save);
-            Monitor.Log($"TestMode: auto-loading save '{save}'...", LogLevel.Info);
-        }
-        catch (Exception ex)
-        {
-            Monitor.Log($"TestMode: auto-load failed: {ex.Message}", LogLevel.Error);
-        }
-    }
-
-    private string? GetNextTestSave()
-    {
-        if (Config.TestSaveQueue.Length > 0)
-        {
-            return testSaveQueueIndex < Config.TestSaveQueue.Length
-                ? Config.TestSaveQueue[testSaveQueueIndex]
-                : null;
-        }
-        return string.IsNullOrWhiteSpace(Config.TestAutoLoadSave) ? null : Config.TestAutoLoadSave;
-    }
-
-    private void TryAdvanceTestSaveQueue()
-    {
-        if (!Config.TestMode || scenarioRunner is null || !scenarioRunner.IsDone)
-            return;
-
-        scenarioRunner.OnReturnedToTitle();
-        if (Config.TestSaveQueue.Length == 0 || testSaveQueueIndex >= Config.TestSaveQueue.Length - 1)
-        {
-            Monitor.Log("TestMode: all queued saves completed.", LogLevel.Info);
-            return;
-        }
-
-        testSaveQueueIndex++;
-        Monitor.Log($"TestMode: advancing to next save '{Config.TestSaveQueue[testSaveQueueIndex]}'.", LogLevel.Info);
-        Game1.ExitToTitle();
-    }
-
     private static readonly (string Id, string Name, string Url, string Format)[] LlmProviders =
     {
         ("deepseek", "DeepSeek", "https://api.deepseek.com", "openai"),
@@ -331,6 +266,14 @@ public sealed class ModEntry : Mod
             () => "调试日志"
         );
 
+        api.AddBoolOption(
+            ModManifest,
+            () => Config.EnableNativeImeCandidateWindow,
+            value => Config.EnableNativeImeCandidateWindow = value,
+            () => "显示中文输入法候选框",
+            () => "在 Valewake 对话框附近显示 Windows 输入法的原生候选窗口"
+        );
+
         Monitor.Log("Valewake settings registered in Generic Mod Config Menu.", LogLevel.Info);
     }
 
@@ -407,7 +350,6 @@ public sealed class ModEntry : Mod
         actionJobManager?.Load();
         mineExpeditionManager?.Load();
         meetingManager?.Load();
-        scenarioRunner?.OnSaveLoaded();
         Monitor.Log($"Save loaded for {Game1.player.Name} on {Game1.player.farmName.Value} Farm.", LogLevel.Info);
         LogSnapshot("Initial save snapshot");
     }
@@ -419,14 +361,11 @@ public sealed class ModEntry : Mod
 
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
     {
-        scenarioRunner?.OnDayStarted();
         LogSnapshot("Day started");
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
-        TryAutoLoadTestSave();
-
         while (mainThreadActions.TryDequeue(out Action? action))
         {
             try
@@ -442,8 +381,6 @@ public sealed class ModEntry : Mod
         actionJobManager?.Update();
         mineExpeditionManager?.Update();
         meetingManager?.Update();
-        scenarioRunner?.OnUpdateTicked();
-        TryAdvanceTestSaveQueue();
 
         if (pendingVanillaNpc is not null &&
             !pendingVanillaDialogueSeen &&
@@ -477,9 +414,6 @@ public sealed class ModEntry : Mod
 
     private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
     {
-        scenarioRunner?.OnReturnedToTitle();
-        testAutoLoadDone = false;
-        testAutoLoadCounter = 0;
         string saveFolder = Constants.SaveFolderName ?? "";
         if (!string.IsNullOrWhiteSpace(saveFolder))
             _ = RollbackMemoryAsync($"{saveFolder}:", "save_rolled_back");
@@ -491,6 +425,15 @@ public sealed class ModEntry : Mod
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
     {
+        if (Game1.activeClickableMenu is NpcChatInputMenu chatMenu && e.Button == SButton.Enter)
+        {
+            // Handle chat submission before Stardew/MonoGame sees Enter. On some
+            // Windows fullscreen setups the first Enter after focusing a custom
+            // text box leaks into the display-mode shortcut path.
+            Helper.Input.Suppress(e.Button);
+            chatMenu.SubmitFromKeyboard();
+            return;
+        }
         if (Context.IsWorldReady && e.Button == Config.ExpeditionTargetButton && mineExpeditionManager?.HasActiveExpedition == true)
         {
             SetExpeditionTarget(e.Cursor.GrabTile);
@@ -792,21 +735,6 @@ public sealed class ModEntry : Mod
                     );
                 }
 
-                if (Config.TestMode && Config.TestAutoConfirm && scenarioRunner is not null && scenarioRunner.IsRunning)
-                {
-                    bool accepted = response.ActionProposal is not null && actionDecision?.Allowed == true;
-                    if (accepted)
-                        AcceptProposal(currentNpc, response.ActionProposal!, actionDecision!, response.TurnId);
-                    scenarioRunner.NotifyChatResult(
-                        currentNpc.Name,
-                        response.TurnId,
-                        response.Reply,
-                        response.ActionProposal?.Action ?? "",
-                        accepted
-                    );
-                    return;
-                }
-
                 Action? afterDialogue = continueConversation && IsActiveChatNpc(currentNpc)
                     ? () => OpenChatInput(currentNpc)
                     : null;
@@ -958,7 +886,7 @@ public sealed class ModEntry : Mod
         {
             actionJobManager!.TraceConfirmation(proposal, npc, true, sourceTurnId);
             ActionJob job = actionJobManager!.Accept(proposal, npc, decision, sourceTurnId);
-            Game1.addHUDMessage(new HUDMessage($"{npc.displayName} accepted the job ({job.MaxTargets} max)."));
+            Game1.addHUDMessage(new HUDMessage(FormatAcceptedJobMessage(npc, job)));
         }
         EndChatSession();
     }
@@ -1013,9 +941,7 @@ public sealed class ModEntry : Mod
                     else
                     {
                         ActionJob job = actionJobManager!.Accept(proposal, npc, decision, sourceTurnId);
-                        Game1.addHUDMessage(new HUDMessage(
-                            $"{npc.displayName} accepted the job ({job.MaxTargets} max)."
-                        ));
+                        Game1.addHUDMessage(new HUDMessage(FormatAcceptedJobMessage(npc, job)));
                     }
                     EndChatSession();
                     return;
@@ -1027,6 +953,11 @@ public sealed class ModEntry : Mod
             npc
         );
     }
+
+    private static string FormatAcceptedJobMessage(NPC npc, ActionJob job) =>
+        job.MaxTargets > 0
+            ? $"{npc.displayName} accepted the job ({job.MaxTargets} max)."
+            : $"{npc.displayName} accepted the job and will handle every eligible target.";
 
     private void SetExpeditionTarget(Vector2 tile)
     {
@@ -1090,7 +1021,8 @@ public sealed class ModEntry : Mod
         Game1.activeClickableMenu = new NpcChatInputMenu(
             npc,
             playerInput => SubmitContinuousChat(npc, playerInput),
-            EndChatSession
+            EndChatSession,
+            Config.EnableNativeImeCandidateWindow
         );
     }
 

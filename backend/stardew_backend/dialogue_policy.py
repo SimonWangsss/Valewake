@@ -192,11 +192,18 @@ def relationship_from_state(game_state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def relationship_voice(relationship: Dict[str, Any]) -> Dict[str, str]:
+def relationship_voice(
+    relationship: Dict[str, Any],
+    prior_interactions: int = 0,
+) -> Dict[str, str]:
     try:
         hearts = max(0, int(relationship.get("hearts", 0) or 0))
     except (TypeError, ValueError):
         hearts = 0
+    try:
+        prior_interactions = max(0, int(prior_interactions or 0))
+    except (TypeError, ValueError):
+        prior_interactions = 0
     status = str(relationship.get("status", "acquaintance") or "acquaintance").lower()
     if status == "divorced":
         stage = "guarded_after_breakup"
@@ -209,19 +216,47 @@ def relationship_voice(relationship: Dict[str, Any]) -> Dict[str, str]:
         guidance = "Allow understated romantic warmth and personal familiarity without becoming clingy or generic."
     elif hearts >= 8:
         stage = "very_close"
-        guidance = "Speak with strong trust and personal familiarity, but keep romance platonic unless the status supports it."
+        guidance = (
+            "Speak with strong trust and personal familiarity; any former coldness or brusqueness "
+            "is gone and replaced by genuine warmth in the NPC's own voice. "
+            "Keep romance platonic unless the status supports it."
+        )
     elif hearts >= 6:
         stage = "close_friend"
-        guidance = "Be noticeably warmer, more candid, and willing to reference shared history."
+        guidance = (
+            "Be noticeably warmer, more candid, and willing to reference shared history; "
+            "any remaining brusqueness should give way to dry, genuine affection."
+        )
     elif hearts >= 4:
         stage = "friend"
-        guidance = "Be friendly and relaxed, while preserving the NPC's normal reserve or sharp edges."
+        guidance = (
+            "Be friendly and relaxed; let any guarded or brusque edges soften into "
+            "comfortable familiarity while keeping the NPC's personality."
+        )
     elif hearts >= 2:
         stage = "familiar"
-        guidance = "Show recognition and modest familiarity, but avoid intimate language or unconditional trust."
+        guidance = (
+            "Show recognition and modest familiarity, and begin relaxing any guarded or brusque edges; "
+            "avoid intimate language or unconditional trust."
+        )
+    elif hearts <= 0 and prior_interactions <= 0:
+        stage = "first_meeting"
+        guidance = (
+            "This is your first conversation with the farmer - a complete stranger. "
+            "Do not assume familiarity, do not claim to know the player, and do not apologize "
+            "or soften when challenged about your tone. Stay anchored to your baseline personality: "
+            "guarded, irritable, or blunt NPCs stay distant, brief, and unapologetic; "
+            "reserved NPCs stay politely shy; warm NPCs may be pleasant but not presumptuously personal. "
+            "No pet names, no intimacy, no instant trust."
+        )
     else:
         stage = "acquaintance"
-        guidance = "Remain polite or characteristically reserved; avoid pet names, intimacy, and instant trust."
+        guidance = (
+            "You barely know the farmer. Match your baseline personality's distance: "
+            "guarded or blunt NPCs must not default to warm politeness, apologies, or eager helpfulness; "
+            "warm NPCs may stay pleasant but not presumptuously familiar. "
+            "No pet names, intimacy, or instant trust."
+        )
     return {"stage": stage, "guidance": guidance}
 
 

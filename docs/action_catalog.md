@@ -10,7 +10,7 @@ combat hits, or money directly.
 ### Water crops
 
 - Example: `你能帮我给农场里的作物浇水吗？`
-- Limit: at most 10 eligible dry crop tiles; dead crops and already watered soil are skipped.
+- Limit: all eligible dry crop tiles captured when the job begins; dead crops and already watered soil are skipped.
 - Execution: the NPC travels to the farm, walks to each target, plays the watering effect,
   and can continue off-screen.
 - Ends: target list completes, no eligible target exists, 22:00 is reached, the day/save
@@ -19,7 +19,7 @@ combat hits, or money directly.
 ### Clear weeds
 
 - Example: `帮我清理农场里的杂草吧。`
-- Limit: at most 10 objects on the strict weed allowlist. Crops, machines, fences,
+- Limit: all eligible objects captured when the job begins on the strict weed allowlist. Crops, machines, fences,
   decorations, trees, and placed items are excluded.
 - Execution and end conditions: the same farm Job Queue lifecycle as watering.
 
@@ -41,7 +41,7 @@ combat hits, or money directly.
 - Requirement: adult social NPC, at least 4 hearts by default, before 23:00.
 - One confirmation starts a continuous session with this priority:
   nearby hostile monster, manual `G` target, autonomous eligible mine node, player follow.
-- Mining is limited to 10 nodes per expedition by default and uses visible pickaxe swings.
+- Mining continues within the configured radius for the expedition and uses visible pickaxe swings.
 - Defense only considers hostile monsters near the player and does not pursue far targets.
 - Cross-map following, schedule reservation, speed restoration, and trace recording remain
   active for the whole session.

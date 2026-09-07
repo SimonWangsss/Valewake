@@ -82,7 +82,8 @@ public sealed class ActionJob
     public string NpcName { get; set; } = "";
     public string Action { get; set; } = "";
     public string State { get; set; } = ActionJobStates.Accepted;
-    public int MaxTargets { get; set; } = 10;
+    // Zero means all eligible targets captured when the job begins.
+    public int MaxTargets { get; set; }
     public int CreatedDay { get; set; }
     public int CreatedTime { get; set; }
     public long AcceptedTick { get; set; }

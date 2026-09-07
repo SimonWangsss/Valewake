@@ -30,6 +30,7 @@ public sealed class ModConfig
     public int NpcInteractionRadiusTiles { get; set; } = 2;
     public int BackendTimeoutSeconds { get; set; } = 30;
     public bool EnableRightClickChat { get; set; } = true;
+    public bool EnableNativeImeCandidateWindow { get; set; } = true;
     public bool PreserveVanillaFirstDialogue { get; set; } = true;
     public int MaxConversationHistoryMessages { get; set; } = 12;
     public bool EnableAiFriendshipChanges { get; set; } = true;
@@ -42,7 +43,7 @@ public sealed class ModConfig
     public bool EnableActionAgent { get; set; } = true;
     public bool EnableWaterCropsAction { get; set; } = true;
     public bool EnableClearWeedsAction { get; set; } = true;
-    public bool EnableChopTreesAction { get; set; } = false;
+    public bool EnableChopTreesAction { get; set; } = true;
     public bool EnableCrossMapDispatch { get; set; } = true;
     public int CrossMapDispatchWaitSeconds { get; set; } = 60;
     public int CrossMapFarmLeadSeconds { get; set; } = 8;
@@ -50,8 +51,6 @@ public sealed class ModConfig
     public int MinimumActionTrust { get; set; } = 0;
     public double MinimumActionConfidence { get; set; } = 0.65;
     public int ActionRequestAttemptLimit { get; set; } = 3;
-    public int MaxWaterTilesPerJob { get; set; } = 10;
-    public int MaxWeedsPerJob { get; set; } = 10;
     public int MaxTreesPerJob { get; set; } = 3;
     public int ActionTargetRadiusTiles { get; set; } = 12;
     public int ActionPathTimeoutTicks { get; set; } = 1800;
@@ -69,20 +68,8 @@ public sealed class ModConfig
     public int ExpeditionWarpDelayTicks { get; set; } = 75;
     public int ExpeditionDefenseRadiusTiles { get; set; } = 6;
     public int ExpeditionMiningRadiusTiles { get; set; } = 8;
-    public int ExpeditionMaxMineTargets { get; set; } = 10;
     public int ExpeditionAttackDamage { get; set; } = 12;
     public int ExpeditionEndTime { get; set; } = 2300;
     public int ExpeditionTargetSnapRadiusTiles { get; set; } = 1;
     public SButton ExpeditionTargetButton { get; set; } = SButton.G;
-
-    // Scenario test runner (Track B). Disabled by default; normal play is unaffected while TestMode=false.
-    public bool TestMode { get; set; } = false;
-    public bool TestAutoRun { get; set; } = false;
-    public bool TestAutoConfirm { get; set; } = true;
-    public string TestAutoLoadSave { get; set; } = "";
-    public string TestScenarioFile { get; set; } = "data/scenarios/seven_day_smoke.json";
-    public string[] TestSaveAllowlist { get; set; } = Array.Empty<string>();
-    public string[] TestSaveQueue { get; set; } = Array.Empty<string>();
-    public int TestWaitTerminalTicks { get; set; } = 7200;
-    public bool TestAutoExitAfterRun { get; set; } = false;
 }

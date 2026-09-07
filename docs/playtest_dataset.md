@@ -13,16 +13,13 @@ The linkage chain is:
 turn_id -> proposal_id -> job_id or expedition_id -> outcome events
 ```
 
-Backend files are under `Valewake/Backend/data/traces` in the deployed mod:
+All trace files now live together under `Valewake/data/traces` in the deployed mod:
 
-- `agent_trace.jsonl`: prompt inputs, retrieval, policy, reply, memory writes, proposal.
-- `dataset_events.jsonl`: save commit/rollback and applied relationship outcomes.
-- `dataset_annotations.jsonl`: human labels made with `agent_mark`.
-
-SMAPI-side files are under `Valewake/data/traces`:
-
-- `action_trace.jsonl`: farm proposal, confirmation, pathing, target, and completion events.
-- `expedition_trace.jsonl`: follow, map transition, combat, mining, return, and failure events.
+- `agent_trace.jsonl` (backend): prompt inputs, retrieval, policy, reply, memory writes, proposal.
+- `dataset_events.jsonl` (backend): save commit/rollback and applied relationship outcomes.
+- `dataset_annotations.jsonl` (backend): human labels made with `agent_mark`.
+- `action_trace.jsonl` (SMAPI): farm proposal, confirmation, pathing, target, and completion events.
+- `expedition_trace.jsonl` (SMAPI): follow, map transition, combat, mining, return, and failure events.
 
 ## Annotating real play
 
@@ -55,9 +52,9 @@ Run from the repository root after closing the game/backend so the files are sta
 
 ```powershell
 backend\.venv\Scripts\python.exe backend\tools\export_dataset.py `
-  --trace "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\Backend\data\traces\agent_trace.jsonl" `
-  --events "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\Backend\data\traces\dataset_events.jsonl" `
-  --annotations "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\Backend\data\traces\dataset_annotations.jsonl" `
+  --trace "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\data\traces\agent_trace.jsonl" `
+  --events "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\data\traces\dataset_events.jsonl" `
+  --annotations "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\data\traces\dataset_annotations.jsonl" `
   --action-trace "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\data\traces\action_trace.jsonl" `
   --expedition-trace "E:\SteamLibrary\steamapps\common\Stardew Valley\Mods\Valewake\data\traces\expedition_trace.jsonl" `
   --output "exports\playtest_dataset.jsonl"

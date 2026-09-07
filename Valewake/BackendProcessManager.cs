@@ -118,6 +118,16 @@ public sealed class BackendProcessManager : IDisposable
             RedirectStandardError = true
         };
 
+        // Unify the backend data directory with the SMAPI-side "data" folder so the
+        // dialogue traces (agent_trace/dataset_events) and action traces
+        // (action_trace/expedition_trace) all land under <mod>\data instead of being
+        // split across <mod>\data and <mod>\Backend\data.
+        string unifiedDataDir = Path.GetFullPath(Path.Combine(modDirectory, "data"));
+        startInfo.Environment["STARDEW_TRACE_PATH"] = Path.Combine(unifiedDataDir, "traces", "agent_trace.jsonl");
+        startInfo.Environment["STARDEW_MEMORY_PATH"] = Path.Combine(unifiedDataDir, "memory", "player_memory.json");
+        startInfo.Environment["STARDEW_RAG_DIR"] = Path.Combine(unifiedDataDir, "rag", "stardew");
+        startInfo.Environment["STARDEW_PERSONA_PATH"] = Path.Combine(unifiedDataDir, "personas", "stardew_npcs.json");
+
         ownedProcess = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
         ownedProcess.OutputDataReceived += (_, e) =>
         {

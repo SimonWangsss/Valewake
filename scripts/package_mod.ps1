@@ -27,8 +27,11 @@ Copy-Item -LiteralPath (Join-Path $backend ".env.example") -Destination $bundle 
 $providersBundle = Join-Path $bundle "providers"
 New-Item -ItemType Directory -Path $providersBundle -Force | Out-Null
 Copy-Item -Path (Join-Path $backend "providers\*") -Destination $providersBundle -Force
-$personasBundle = Join-Path $bundle "data\personas"
-$ragBundle = Join-Path $bundle "data\rag"
+# Bundled data now lives in the mod's unified "data" folder (shared with the
+# SMAPI-side action/expedition traces) rather than under "Backend\data".
+$dataDir = Join-Path $root "Valewake\data"
+$personasBundle = Join-Path $dataDir "personas"
+$ragBundle = Join-Path $dataDir "rag"
 New-Item -ItemType Directory -Path $personasBundle -Force | Out-Null
 New-Item -ItemType Directory -Path $ragBundle -Force | Out-Null
 Copy-Item -Path (Join-Path $backend "data\personas\*") -Destination $personasBundle -Recurse -Force

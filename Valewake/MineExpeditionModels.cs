@@ -38,7 +38,8 @@ public sealed class MineExpedition
     public bool EndAfterMining { get; set; }
     public string State { get; set; } = MineExpeditionStates.Joining;
     public string ResourcePriority { get; set; } = "any";
-    public int MaxTargets { get; set; } = 10;
+    // Zero means mining remains active without a target-count limit.
+    public int MaxTargets { get; set; }
     public int CompletedTargets { get; set; }
     public int MonstersDefeated { get; set; }
     public int CreatedDay { get; set; }
@@ -78,6 +79,8 @@ public sealed class MineExpedition
     [JsonIgnore] public int RuntimeNavigationCandidateIndex { get; set; }
     [JsonIgnore] public bool RuntimeNavigationFailed { get; set; }
     [JsonIgnore] public HashSet<string> RuntimeSkippedMineTiles { get; set; } = new();
+    [JsonIgnore] public long RuntimeLastRetryTick { get; set; }
+    [JsonIgnore] public long RuntimeUnavailableTick { get; set; }
 }
 
 public sealed class ExpeditionTargetResult

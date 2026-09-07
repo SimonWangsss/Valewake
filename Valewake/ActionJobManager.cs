@@ -117,13 +117,13 @@ public sealed class ActionJobManager
         {
             ActionIds.WaterCrops when config.EnableWaterCropsAction =>
                 ActionProposalDecision.Allow(
-                    $"Let {npc.displayName} water up to {Math.Min(requestedMaximum, config.MaxWaterTilesPerJob)} nearby crop tiles?",
-                    Math.Min(requestedMaximum, config.MaxWaterTilesPerJob)
+                    $"Let {npc.displayName} water all currently eligible crop tiles on the farm?",
+                    0
                 ),
             ActionIds.ClearWeeds when config.EnableClearWeedsAction =>
                 ActionProposalDecision.Allow(
-                    $"Let {npc.displayName} clear up to {Math.Min(requestedMaximum, config.MaxWeedsPerJob)} nearby weeds?",
-                    Math.Min(requestedMaximum, config.MaxWeedsPerJob)
+                    $"Let {npc.displayName} clear all currently eligible weeds on the farm?",
+                    0
                 ),
             ActionIds.ChopTrees when config.EnableChopTreesAction =>
                 ActionProposalDecision.Allow(
@@ -376,7 +376,9 @@ public sealed class ActionJobManager
                 {
                     List<ActionTile> eligibleTargets = FindEligibleTargets(job, farm);
                     job.BaselineEligibleTargetCount = eligibleTargets.Count;
-                    job.Targets = eligibleTargets.Take(job.MaxTargets).ToList();
+                    job.Targets = job.MaxTargets > 0
+                        ? eligibleTargets.Take(job.MaxTargets).ToList()
+                        : eligibleTargets.ToList();
                     job.BaselineSelectedTargetCount = job.Targets.Count;
                     job.RuntimeBaselineWorldState = CaptureFarmWorldState(farm);
                     Save();
@@ -495,8 +497,11 @@ public sealed class ActionJobManager
             job.RuntimeStandCandidateIndex = 0;
             if (job.RuntimeStandCandidates.Count == 0)
             {
+                job.LastTarget = new ActionTile(target.X, target.Y);
                 job.FailedTargets++;
                 job.CurrentTargetIndex++;
+                job.LastMessage = "No walkable tile was adjacent to the target.";
+                Trace(job, "target_no_stand_tile");
                 continue;
             }
 
@@ -555,6 +560,8 @@ public sealed class ActionJobManager
                 Trace(job, "target_path_retry");
                 return;
             }
+            ActionTile failedTarget = job.Targets[job.CurrentTargetIndex];
+            job.LastTarget = new ActionTile(failedTarget.X, failedTarget.Y);
             job.FailedTargets++;
             if (job.CompletedTargets == 0 &&
                 job.FailedTargets == 1 &&
@@ -802,16 +809,16 @@ public sealed class ActionJobManager
             new(target.X, target.Y - 1)
         };
         return candidates
-            .Where(tile => IsWalkable(location, tile) && HasOpenApproach(location, tile, target))
-            .OrderBy(tile => TileDistance(new Vector2(tile.X, tile.Y), npcTile))
+            .Where(tile => IsWalkable(location, tile))
+            // Prefer a straight open approach, but keep side-entry tiles as fallbacks.
+            // Requiring the tile behind the worker to be empty incorrectly rejects many
+            // reachable trees beside fences, paths, buildings, or other trees.
+            .OrderByDescending(tile => HasOpenApproach(location, tile, target))
+            .ThenBy(tile => TileDistance(new Vector2(tile.X, tile.Y), npcTile))
             .ToList();
     }
 
-    /// <summary>
-    /// A stand tile is only usable if the tile one step further away from the target is
-    /// also walkable, so the NPC can actually path onto the stand tile from the open side
-    /// instead of a walkable tile walled in by other trees/objects.
-    /// </summary>
+    /// <summary>Whether the worker can approach this stand tile in a straight line.</summary>
     private static bool HasOpenApproach(GameLocation location, ActionTile stand, ActionTile target)
     {
         int beyondX = stand.X + (stand.X - target.X);
@@ -913,7 +920,7 @@ public sealed class ActionJobManager
         job.RuntimeReturnCandidateIndex = 0;
         if (job.RuntimeReturnCandidates.Count == 0)
         {
-            Fail(job, "No walkable return route endpoint was available.", terminal: false);
+            Complete(job, "Work completed; no walkable return route endpoint was available.");
             return;
         }
 
@@ -955,7 +962,7 @@ public sealed class ActionJobManager
         }
         if (timedOut)
         {
-            Fail(job, "NPC could not complete the return route before timeout.", terminal: false);
+            Complete(job, "Work completed; NPC could not complete the return route before timeout.");
             return;
         }
         if (npc.controller is null &&
@@ -964,7 +971,7 @@ public sealed class ActionJobManager
             job.RuntimeReturnCandidateIndex++;
             if (job.RuntimeReturnCandidateIndex >= job.RuntimeReturnCandidates.Count)
             {
-                Fail(job, "NPC could not find a connected path back to the departure point.", terminal: false);
+                Complete(job, "Work completed; NPC could not find a connected path back to the departure point.");
                 return;
             }
             job.ReturnPathRetryCount++;
@@ -1053,6 +1060,8 @@ public sealed class ActionJobManager
     {
         npc.controller = null;
         npc.Halt();
+        // 清除 NPC 当前的特殊动画（例如山姆弹吉他），否则瞬移到农场后还会保持原动画。
+        npc.Sprite.ClearAnimation();
         npc.followSchedule = false;
     }
 
@@ -1063,6 +1072,7 @@ public sealed class ActionJobManager
             return;
         npc.controller = null;
         npc.Halt();
+        npc.Sprite.ClearAnimation();
         GameLocation? returnLocation = Game1.getLocationFromName(job.ReturnContext.LocationName);
         if (returnLocation is not null)
         {
@@ -1354,7 +1364,8 @@ public sealed class ActionJobManager
     {
         NPC? npc = Game1.getCharacterFromName(job.NpcName);
         bool targetOutcomeEvent = eventName is
-            "target_completed" or "target_skipped" or "target_strike" or "background_target_completed";
+            "target_completed" or "target_skipped" or "target_strike" or
+            "background_target_completed" or "target_no_stand_tile" or "target_path_failed";
         ActionTile? currentTarget = targetOutcomeEvent && job.LastTarget is not null
             ? job.LastTarget
             : job.CurrentTargetIndex >= 0 && job.CurrentTargetIndex < job.Targets.Count

@@ -11,6 +11,10 @@ SUPPORTED_ACTIONS = {
 FARM_ACTIONS = {"water_crops", "clear_weeds", "chop_trees"}
 MINE_ACTIONS = {"join_mine_expedition", "defend_player", "mine_target", "mine_nearby", "mine_expedition"}
 MEETING_ACTIONS = {"schedule_meeting"}
+UNBOUNDED_ACTIONS = {
+    "water_crops", "clear_weeds", "join_mine_expedition", "defend_player",
+    "mine_nearby", "mine_expedition",
+}
 
 
 def action_eligibility(action: str, game_state: dict[str, Any]) -> dict[str, Any]:
@@ -135,7 +139,18 @@ def requested_action(player_input: str) -> str:
         "i already", "i went", "yesterday", "this morning",
         "\u6211\u5df2\u7ecf", "\u6211\u521a\u521a", "\u6211\u6628\u5929", "\u4eca\u65e9\u6211",
     ))
-    if (discussion_marker or past_statement) and not explicit_request:
+    # 玩家表达"自己打算/想/要去做"而不是请 NPC 帮忙——这类个人意图不应触发动作请求。
+    # 例："我想在附近砍砍树"（自己要砍）vs "帮我砍树"（请 NPC 砍）。
+    self_intent = any(marker in lowered for marker in (
+        "i'm going to", "i plan to", "i want to", "i'll ", "myself", "on my own",
+        "\u6253\u7b97", "\u51c6\u5907", "\u6211\u60f3", "\u6211\u8981", "\u6211\u81ea\u5df1", "\u81ea\u5df1\u6765",
+    ))
+    # 双向意图（见面/一起做）——不是"自己一个人干"，不应被上面的个人意图拦截。
+    mutual_intent = any(marker in lowered for marker in (
+        "together", "with you", "let's meet", "meet me",
+        "\u4e00\u8d77", "\u89c1\u9762", "\u548c\u4f60", "\u8ddf\u4f60", "\u627e\u4f60", "\u6211\u4eec", "\u966a\u6211",
+    ))
+    if (discussion_marker or past_statement or (self_intent and not mutual_intent)) and not explicit_request:
         return ""
     if any(marker in lowered for marker in (
         "mine expedition", "mining expedition", "look for iron", "prioritize iron",
@@ -254,11 +269,18 @@ def normalize_action_proposal(
     parameters = value.get("parameters")
     if not isinstance(parameters, dict):
         parameters = {}
-    default_maximum = 1 if action == "mine_target" else 10
-    try:
-        maximum = max(1, min(10, int(parameters.get("max_targets", default_maximum))))
-    except (TypeError, ValueError):
-        maximum = default_maximum
+    if action in UNBOUNDED_ACTIONS:
+        maximum = 0
+    elif action == "mine_target":
+        maximum = 1
+    elif action == "chop_trees":
+        maximum = 3
+    else:
+        default_maximum = 10
+        try:
+            maximum = max(1, min(10, int(parameters.get("max_targets", default_maximum))))
+        except (TypeError, ValueError):
+            maximum = default_maximum
 
     priority = str(parameters.get("resource_priority") or "any").strip().lower()
     if "\u94c1" in player_input or "iron" in player_input.lower():

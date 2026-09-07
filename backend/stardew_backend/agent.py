@@ -98,7 +98,10 @@ class StardewAgent:
             and action_context.get("eligible")
             and prior_refusals >= action_context.get("request_attempt_limit", 3) - 1
         )
-        dialogue_policy["relationship_voice"] = relationship_voice(relationship)
+        dialogue_policy["relationship_voice"] = relationship_voice(
+            relationship,
+            prior_interactions=social_context.get("prior_interaction_count", 0),
+        )
         dialogue_policy["action_decision_context"] = action_context
         saved_memories: list[str] = []
         tags = self._rag_tags(game_state)
@@ -499,7 +502,7 @@ class StardewAgent:
             "  \"action_proposal\": null or {\n"
             "    \"action\": \"water_crops|clear_weeds|chop_trees|join_mine_expedition|defend_player|mine_target|mine_nearby|mine_expedition|schedule_meeting\",\n"
             "    \"disposition\": \"accept|refuse|negotiate\",\n"
-            "    \"parameters\": {\"max_targets\": 10, \"resource_priority\": \"any|stone|copper|iron|gold|iridium\", \"location\": \"\", \"time_of_day\": 0, \"topic\": \"\"},\n"
+            "    \"parameters\": {\"max_targets\": 0, \"resource_priority\": \"any|stone|copper|iron|gold|iridium\", \"location\": \"\", \"time_of_day\": 0, \"topic\": \"\"},\n"
             "    \"confidence\": 0.0,\n"
             "    \"reason\": \"why the NPC agrees or refuses\",\n"
             "    \"evidence\": \"direct action request from the player\"\n"
@@ -532,11 +535,14 @@ class StardewAgent:
         proposal = generation.get("action_proposal") or {}
         if not action_context.get("eligible"):
             reason_code = str(action_context.get("reason_code", "ineligible"))
+            model_refused = str(proposal.get("disposition", "")).lower() == "refuse"
+            has_natural_reply = bool(str(generation.get("reply", "")).strip())
             generation["action_proposal"] = forced_action_proposal(
                 action, player_input, "refuse", reason_code
             )
-            generation["reply"] = localized_action_refusal(player_input, action_context)
-            generation["emotion"] = "neutral"
+            if not model_refused or not has_natural_reply:
+                generation["reply"] = localized_action_refusal(player_input, action_context)
+                generation["emotion"] = "neutral"
             return generation
 
         if action_context.get("force_accept"):
@@ -698,6 +704,7 @@ def localized_fallback(player_input: str) -> str:
 
 def localized_action_refusal(player_input: str, context: dict[str, Any]) -> str:
     reason = str(context.get("reason_code", ""))
+    action = str(context.get("requested_action", ""))
     if contains_chinese(player_input):
         if reason == "insufficient_hearts":
             return "我们还没熟到能让我答应这种事。再相处一阵吧。"
@@ -709,6 +716,15 @@ def localized_action_refusal(player_input: str, context: dict[str, Any]) -> str:
             return "现在还有活动要顾，等结束后再说吧。"
         if reason == "child_npc":
             return "这件事不适合让我来做。"
+        if reason == "action_disabled":
+            disabled_replies = {
+                "chop_trees": "砍树这件事我今天帮不上忙，工具还是先别交给我了。",
+                "water_crops": "今天我没法替你照料田地，浇水还是得先麻烦你自己。",
+                "clear_weeds": "今天我没法替你清理农场，杂草只能先放一放了。",
+                "join_mine_expedition": "今天我没法陪你下矿，还是改天再一起去吧。",
+                "mine_expedition": "今天我没法陪你下矿，还是改天再一起去吧。",
+            }
+            return disabled_replies.get(action, "这件事今天恐怕帮不上忙。")
         return "这件事我现在不能答应。"
     if reason == "insufficient_hearts":
         return "We don't know each other well enough for that yet. Give it some time."
@@ -716,6 +732,15 @@ def localized_action_refusal(player_input: str, context: dict[str, Any]) -> str:
         return "That takes more trust than we have right now."
     if reason == "too_late":
         return "It's too late to start that today."
+    if reason == "action_disabled":
+        disabled_replies = {
+            "chop_trees": "I can't help with the trees today, so you'd better keep the axe.",
+            "water_crops": "I can't tend the crops today, so the watering will have to wait.",
+            "clear_weeds": "I can't clear the farm today. The weeds will have to wait.",
+            "join_mine_expedition": "I can't join you in the mines today. Maybe another time.",
+            "mine_expedition": "I can't join you in the mines today. Maybe another time.",
+        }
+        return disabled_replies.get(action, "I won't be able to help with that today.")
     return "I can't agree to that right now."
 
 

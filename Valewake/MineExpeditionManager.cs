@@ -91,16 +91,14 @@ public sealed class MineExpeditionManager
         if (proposal.Action == ActionIds.MineTarget && Game1.currentLocation is not MineShaft)
             return ActionProposalDecision.Reject("Point at a mine rock while inside the Mines.");
 
-        int maximum = proposal.Action == ActionIds.MineTarget
-            ? 1
-            : Math.Min(GetRequestedMaximum(proposal), config.ExpeditionMaxMineTargets);
+        int maximum = proposal.Action == ActionIds.MineTarget ? 1 : 0;
         string description = proposal.Action switch
         {
             ActionIds.JoinMineExpedition => "follow you through the mines, defend you, and mine nearby eligible rocks",
             ActionIds.DefendPlayer => "follow you and defend against nearby monsters",
             ActionIds.MineTarget => "mine the rock under your cursor",
-            ActionIds.MineNearby => $"mine up to {maximum} nearby allowed rocks",
-            _ => $"join a bounded expedition and mine up to {maximum} allowed rocks"
+            ActionIds.MineNearby => "mine all nearby allowed rocks",
+            _ => "join the expedition and keep mining allowed rocks"
         };
         string prefix = active is null ? $"Let {npc.displayName}" : $"Ask {npc.displayName} to also";
         return ActionProposalDecision.Allow($"{prefix} {description}?", maximum);
@@ -186,29 +184,21 @@ public sealed class MineExpeditionManager
             case ActionIds.MineTarget:
                 expedition.MiningEnabled = true;
                 expedition.MiningMode = "target";
-                expedition.MaxTargets = Math.Min(
-                    config.ExpeditionMaxMineTargets,
-                    Math.Max(expedition.MaxTargets, expedition.CompletedTargets + 1)
-                );
+                if (expedition.MaxTargets > 0)
+                    expedition.MaxTargets = Math.Max(expedition.MaxTargets, expedition.CompletedTargets + 1);
                 TryAssignCursorTarget(expedition);
                 break;
             case ActionIds.MineNearby:
                 expedition.MiningEnabled = true;
                 expedition.MiningMode = "nearby";
-                expedition.MaxTargets = Math.Min(
-                    config.ExpeditionMaxMineTargets,
-                    Math.Max(expedition.MaxTargets, expedition.CompletedTargets + decision.MaxTargets)
-                );
+                expedition.MaxTargets = 0;
                 break;
             case ActionIds.MineExpedition:
                 expedition.DefenseEnabled = true;
                 expedition.MiningEnabled = true;
                 expedition.MiningMode = "nearby";
                 expedition.ResourcePriority = GetStringParameter(proposal, "resource_priority", expedition.ResourcePriority);
-                expedition.MaxTargets = Math.Min(
-                    config.ExpeditionMaxMineTargets,
-                    Math.Max(expedition.MaxTargets, expedition.CompletedTargets + decision.MaxTargets)
-                );
+                expedition.MaxTargets = 0;
                 break;
         }
         expedition.Action = CanonicalAction(expedition, proposal.Action);
@@ -258,9 +248,14 @@ public sealed class MineExpeditionManager
         NPC? npc = Game1.getCharacterFromName(expedition.NpcName);
         if (npc is null || Game1.currentLocation is null)
         {
-            Fail(expedition, "NPC or player location became unavailable.");
+            // 换图/矿洞层切换时 NPC 可能短暂不可用，给一个宽限期再判定失败。
+            if (expedition.RuntimeUnavailableTick == 0)
+                expedition.RuntimeUnavailableTick = Game1.ticks;
+            if (Game1.ticks - expedition.RuntimeUnavailableTick > 180)
+                Fail(expedition, "NPC or player location became unavailable.");
             return;
         }
+        expedition.RuntimeUnavailableTick = 0;
         MaintainReservation(npc, expedition);
         if (Game1.timeOfDay >= config.ExpeditionEndTime && expedition.State != MineExpeditionStates.Returning)
         {
@@ -330,8 +325,6 @@ public sealed class MineExpeditionManager
             TraceTargetSelection(expedition, cursorTile, null, "no_allowed_node_near_cursor");
             return new ExpeditionTargetResult { Message = "鼠标下不是可开采的石头或矿石节点。" };
         }
-        if (expedition.CompletedTargets >= config.ExpeditionMaxMineTargets)
-            return new ExpeditionTargetResult { Message = $"本次探险已达到 {config.ExpeditionMaxMineTargets} 个开采目标的上限。" };
         Vector2 selectedTile = selected.Value.Key;
         StardewValley.Object obj = selected.Value.Value;
         expedition.MiningEnabled = true;
@@ -339,7 +332,8 @@ public sealed class MineExpeditionManager
             expedition.MiningMode = "target";
         expedition.EndAfterMining = false;
         expedition.Action = expedition.DefenseEnabled ? ActionIds.MineExpedition : ActionIds.MineTarget;
-        expedition.MaxTargets = Math.Max(expedition.MaxTargets, expedition.CompletedTargets + 1);
+        if (expedition.MaxTargets > 0)
+            expedition.MaxTargets = Math.Max(expedition.MaxTargets, expedition.CompletedTargets + 1);
         expedition.RuntimePriorityTile = ToActionTile(selectedTile);
         expedition.RuntimeMiningTile = null;
         ResetTaskNavigation(expedition);
@@ -349,7 +343,7 @@ public sealed class MineExpeditionManager
         return new ExpeditionTargetResult
         {
             Accepted = true,
-            Message = $"已指定矿石：{obj.DisplayName} [{(int)selectedTile.X},{(int)selectedTile.Y}]（{expedition.CompletedTargets + 1}/{expedition.MaxTargets}）。"
+            Message = $"已指定矿石：{obj.DisplayName} [{(int)selectedTile.X},{(int)selectedTile.Y}]。"
         };
     }
 
@@ -366,7 +360,7 @@ public sealed class MineExpeditionManager
         return expedition is null
             ? "No active Valewake mine expedition."
             : $"{expedition.ExpeditionId}: {expedition.NpcName} {expedition.Action} [{expedition.State}] " +
-              $"mined={expedition.CompletedTargets}/{expedition.MaxTargets}, defeated={expedition.MonstersDefeated}";
+              $"mined={expedition.CompletedTargets}, defeated={expedition.MonstersDefeated}";
     }
 
     private void FollowPlayer(MineExpedition expedition, NPC npc)
@@ -403,20 +397,23 @@ public sealed class MineExpeditionManager
 
         if (stalled)
         {
+            // 用独立的节流时间戳控制重试频率，避免每个 tick 都立刻重试。
+            if (Game1.ticks - expedition.RuntimeLastRetryTick < config.ExpeditionStallRecoveryTicks)
+                return;
+            expedition.RuntimeLastRetryTick = Game1.ticks;
             expedition.RuntimeFollowCandidateIndex++;
             npc.controller = null;
             npc.Halt();
-            if (Game1.ticks - expedition.RuntimeLastProgressTick >= config.ExpeditionOffscreenCatchUpTicks &&
-                !Utility.isOnScreen(npc.Position, 96))
+            // 持续无进展超过 OffscreenCatchUpTicks 时，无论是否在屏幕内都直接传送到玩家附近，
+            // 避免在复杂地形里无限原地打转。
+            if (Game1.ticks - expedition.RuntimeLastProgressTick >= config.ExpeditionOffscreenCatchUpTicks)
             {
                 WarpNearPlayer(npc, expedition);
                 ResetFollowRuntime(expedition, npc.Tile);
-                Trace(expedition, "follow_stall_offscreen_recovered");
+                Trace(expedition, "follow_stall_recovered");
                 return;
             }
             Trace(expedition, "follow_path_stalled");
-            // Give the new candidate a full recovery window before declaring another stall.
-            expedition.RuntimeLastProgressTick = Game1.ticks;
         }
 
         List<Vector2> candidates = FindOpenCandidatesNear(Game1.currentLocation, Game1.player.Tile, npc.Tile);
@@ -465,7 +462,7 @@ public sealed class MineExpeditionManager
 
     private bool UpdateMining(MineExpedition expedition, NPC npc)
     {
-        if (expedition.CompletedTargets >= expedition.MaxTargets)
+        if (expedition.MaxTargets > 0 && expedition.CompletedTargets >= expedition.MaxTargets)
         {
             if (expedition.EndAfterMining)
                 BeginReturn(expedition, "The requested mining work is complete.");
@@ -678,6 +675,8 @@ public sealed class MineExpeditionManager
     {
         npc.controller = null;
         npc.Halt();
+        // 清除 NPC 当前的特殊动画（例如山姆弹吉他），否则加入远征后还会保持原动画。
+        npc.Sprite.ClearAnimation();
         npc.followSchedule = false;
         MaintainReservation(npc, expedition);
     }
@@ -948,7 +947,7 @@ public sealed class MineExpeditionManager
     {
         ActionIds.JoinMineExpedition => false,
         ActionIds.DefendPlayer => !expedition.DefenseEnabled,
-        ActionIds.MineTarget => expedition.CompletedTargets < config.ExpeditionMaxMineTargets,
+        ActionIds.MineTarget => expedition.RuntimePriorityTile is null,
         ActionIds.MineNearby => !expedition.MiningEnabled || expedition.MiningMode != "nearby",
         ActionIds.MineExpedition => !expedition.DefenseEnabled || !expedition.MiningEnabled ||
                                     expedition.MiningMode != "nearby",
@@ -1104,11 +1103,6 @@ public sealed class MineExpeditionManager
             monitor.Log($"Could not append Expedition Trace: {ex.Message}", LogLevel.Warn);
         }
     }
-
-    private static int GetRequestedMaximum(AgentActionProposal proposal) =>
-        proposal.Parameters.TryGetValue("max_targets", out JsonElement value) && value.TryGetInt32(out int maximum)
-            ? Math.Clamp(maximum, 1, 10)
-            : 10;
 
     private static string GetStringParameter(AgentActionProposal proposal, string key, string fallback) =>
         proposal.Parameters.TryGetValue(key, out JsonElement value) && value.ValueKind == JsonValueKind.String
