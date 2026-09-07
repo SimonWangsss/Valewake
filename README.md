@@ -32,36 +32,6 @@ Valewake 是一款面向《星露谷物语》玩家的 AI NPC Mod。它让鹈鹕
 
 农场任务默认要求 NPC 至少 `2` 心，矿洞同行默认要求至少 `4` 心。年龄、关系、信任、时间、事件状态、多人模式主机权限以及功能开关都是不可通过反复请求绕过的硬条件。对于满足硬条件但被 NPC 主观拒绝的同类请求，默认第 `3` 次会接受。
 
-## 系统架构
-
-```mermaid
-flowchart LR
-    A[SMAPI 游戏事件与 NPC 交互] --> B[Perception Builder]
-    B --> C[Dialogue Policy 与边界检查]
-    C --> D[Lore RAG]
-    C --> E[Player Memory]
-    D --> F[LLM 结构化生成]
-    E --> F
-    F --> G[本地输出验证]
-    G --> H[游戏对话与关系变化]
-    G --> I[Action Proposal]
-    I --> J[资格检查与玩家确认]
-    J --> K[Job Queue / 行动控制器]
-    B --> L[Trace 与 Evaluation]
-    C --> L
-    D --> L
-    E --> L
-    F --> L
-    K --> L
-```
-
-仓库中的两个主要组件：
-
-- `Valewake/`：C# SMAPI Mod，负责游戏接入、界面、状态感知、本地验证和动作执行。
-- `backend/`：独立 FastAPI 后端，负责角色提示词、记忆、Lore 检索、对话策略、模型调用和 Trace。
-
-发行包会附带单文件后端。SMAPI 加载 Mod 后会自动检查 `127.0.0.1:8010`，需要时隐藏启动 `Backend/ValewakeBackend.exe`，退出游戏时再关闭由本 Mod 启动的进程。普通玩家不需要手动启动 Python 或端口。
-
 ## 安装
 
 ### 普通玩家
