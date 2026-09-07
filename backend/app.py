@@ -62,7 +62,7 @@ def health() -> Dict[str, Any]:
     return {
         "ok": True,
         "project": "valewake",
-        "version": "0.10.0",
+        "version": "1.0.0",
         "dialogue_system": "v7-action-alignment",
         "memory_schema": 3,
         "lore_chunks": len(agent.rag.chunks),

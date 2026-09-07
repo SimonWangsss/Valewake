@@ -1,7 +1,7 @@
 {
   "Name": "Valewake",
   "Author": "Simon",
-  "Version": "0.10.0",
+  "Version": "1.0.0",
   "Description": "Memory-aware AI NPC dialogue with bounded farm jobs, mine expeditions, relationship policy, lore, memory, and evaluation traces.",
   "UniqueID": "Simon.Valewake",
   "EntryDll": "Valewake.dll",
