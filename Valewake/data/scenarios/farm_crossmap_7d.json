@@ -1,0 +1,15 @@
+{
+  "scenario_id": "farm_crossmap_7d",
+  "save_allowlist": ["MooMooM_430258472"],
+  "npc": "Emily",
+  "trials": 2,
+  "days": [
+    { "day": 1, "time": 900, "location": "Farm", "npc_location": "Town", "seed": { "crops": 5 }, "chat_input": "帮我给作物浇水。", "wait_terminal_ticks": 12000, "expect_action": "water_crops", "expect_targets": { "min": 5, "max": 5 } },
+    { "day": 2, "time": 900, "location": "Farm", "npc_location": "Town", "seed": { "crops": 5 }, "chat_input": "帮我给作物浇水。", "wait_terminal_ticks": 12000, "expect_action": "water_crops", "expect_targets": { "min": 5, "max": 5 } },
+    { "day": 3, "time": 900, "location": "Farm", "npc_location": "FarmHouse", "seed": { "weeds": 5 }, "chat_input": "帮我清理杂草。", "wait_terminal_ticks": 12000, "expect_action": "clear_weeds", "expect_targets": { "min": 5, "max": 5 } },
+    { "day": 4, "time": 900, "location": "Farm", "npc_location": "FarmHouse", "seed": { "weeds": 5 }, "chat_input": "帮我清理杂草。", "wait_terminal_ticks": 12000, "expect_action": "clear_weeds", "expect_targets": { "min": 5, "max": 5 } },
+    { "day": 5, "time": 900, "location": "Farm", "npc_location": "Town", "seed": { "trees": 3 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 12000, "expect_action": "chop_trees", "expect_targets": { "min": 3, "max": 3 } },
+    { "day": 6, "time": 900, "location": "Farm", "npc_location": "Town", "seed": { "trees": 3 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 12000, "expect_action": "chop_trees", "expect_targets": { "min": 3, "max": 3 } },
+    { "day": 7, "time": 900, "location": "Farm", "npc_location": "FarmHouse", "seed": { "crops": 5 }, "chat_input": "帮我给作物浇水。", "wait_terminal_ticks": 12000, "expect_action": "water_crops", "expect_targets": { "min": 5, "max": 5 } }
+  ]
+}

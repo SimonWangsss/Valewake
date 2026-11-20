@@ -34,6 +34,7 @@ public sealed class ActionJobManager
     private readonly string configHash;
     private readonly Dictionary<string, PendingActionPostcheck> pendingPostchecks = new();
     private ActionJobSaveData data = new();
+    public Func<string, bool> IsExternallyBusy { get; set; } = _ => false;
 
     public ActionJobManager(IModHelper helper, IMonitor monitor, ModConfig config)
     {
@@ -61,6 +62,13 @@ public sealed class ActionJobManager
     }
 
     public bool HasActiveJob(string npcName) => GetActiveJob(npcName) is not null;
+
+    public object[] GetNpcFacts(string npcName) => data.Jobs
+        .Where(j => j.NpcName == npcName).TakeLast(8)
+        .Select(j => (object)new { npc = j.NpcName, job_id = j.JobId, turn_id = j.SourceTurnId,
+            action = j.Action, state = j.State, game_day = j.CreatedDay, location = "Farm",
+            completed_targets = j.CompletedTargets, skipped_targets = j.FailedTargets,
+            message = j.LastMessage }).ToArray();
 
     public ActionJob? GetLastJob(string npcName) =>
         data.Jobs
@@ -95,6 +103,8 @@ public sealed class ActionJobManager
             return ActionProposalDecision.Reject("It is too late to begin a farm job.");
         if (GetActiveJob(npc.Name) is not null)
             return ActionProposalDecision.Reject($"{npc.displayName} already has an active job.");
+        if (IsExternallyBusy(npc.Name))
+            return ActionProposalDecision.Reject("This NPC already has a meeting or expedition reservation.");
 
         int hearts = 0;
         if (Game1.player.friendshipData.TryGetValue(npc.Name, out Friendship? friendship))
@@ -1058,10 +1068,7 @@ public sealed class ActionJobManager
 
     private void ReserveNpc(NPC npc)
     {
-        npc.controller = null;
-        npc.Halt();
-        // 清除 NPC 当前的特殊动画（例如山姆弹吉他），否则瞬移到农场后还会保持原动画。
-        npc.Sprite.ClearAnimation();
+        NpcActivityReset.Stop(npc, helper);
         npc.followSchedule = false;
     }
 

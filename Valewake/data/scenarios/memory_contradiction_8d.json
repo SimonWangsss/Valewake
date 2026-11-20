@@ -1,0 +1,16 @@
+{
+  "scenario_id": "memory_contradiction_8d",
+  "save_allowlist": ["MooMooM_430258472"],
+  "npc": "Emily",
+  "trials": 1,
+  "days": [
+    { "day": 1, "op": "chat_only", "time": 900, "location": "Farm", "chat_input": "我喜欢采矿。" },
+    { "day": 2, "op": "skip" },
+    { "day": 3, "op": "skip" },
+    { "day": 4, "op": "skip" },
+    { "day": 5, "op": "skip" },
+    { "day": 6, "op": "skip" },
+    { "day": 7, "op": "chat_only", "time": 900, "location": "Farm", "chat_input": "我现在不喜欢采矿了。" },
+    { "day": 8, "op": "chat_only", "time": 900, "location": "Farm", "chat_input": "我喜欢采矿吗？" }
+  ]
+}

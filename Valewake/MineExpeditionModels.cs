@@ -26,6 +26,7 @@ public sealed class MineExpeditionSaveData
 
 public sealed class MineExpedition
 {
+    public string SourceMeetingId { get; set; } = "";
     public string ExpeditionId { get; set; } = "";
     public string SourceTurnId { get; set; } = "";
     public string ProposalId { get; set; } = "";
@@ -81,6 +82,19 @@ public sealed class MineExpedition
     [JsonIgnore] public HashSet<string> RuntimeSkippedMineTiles { get; set; } = new();
     [JsonIgnore] public long RuntimeLastRetryTick { get; set; }
     [JsonIgnore] public long RuntimeUnavailableTick { get; set; }
+}
+
+public sealed class MeetingExpeditionHandoff
+{
+    public string MeetingId { get; set; } = "";
+    public ActionReturnContext ReturnContext { get; set; } = new();
+    public int OriginalSpeed { get; set; } = 2;
+    public float OriginalAddedSpeed { get; set; }
+
+    public static MeetingExpeditionHandoff Capture(string meetingId, ActionReturnContext origin, int speed, float addedSpeed) =>
+        new() { MeetingId = meetingId, OriginalSpeed = speed, OriginalAddedSpeed = addedSpeed,
+            ReturnContext = new ActionReturnContext { OriginKind = origin.OriginKind, LocationName = origin.LocationName,
+                TileX = origin.TileX, TileY = origin.TileY, FacingDirection = origin.FacingDirection, FollowSchedule = origin.FollowSchedule } };
 }
 
 public sealed class ExpeditionTargetResult

@@ -25,6 +25,7 @@ public sealed class MineExpeditionManager
     private readonly string tracePath;
     private readonly string traceRunId = $"run_{Guid.NewGuid():N}"[..16];
     private MineExpeditionSaveData data = new();
+    public Func<string, bool> IsExternallyBusy { get; set; } = _ => false;
 
     public MineExpeditionManager(IModHelper helper, IMonitor monitor, ModConfig config)
     {
@@ -35,6 +36,15 @@ public sealed class MineExpeditionManager
     }
 
     public bool HasActiveExpedition => Active is not null;
+
+    public bool IsNpcBusy(string npcName) => Active?.NpcName == npcName;
+
+    public object[] GetNpcFacts(string npcName) => data.Expeditions
+        .Where(e => e.NpcName == npcName).TakeLast(4)
+        .Select(e => (object)new { npc = e.NpcName, expedition_id = e.ExpeditionId,
+            turn_id = e.SourceTurnId, action = e.Action, state = e.State,
+            game_day = e.CreatedDay, completed_targets = e.CompletedTargets,
+            monsters_defeated = e.MonstersDefeated, message = e.LastMessage }).ToArray();
 
     public void Load()
     {
@@ -76,6 +86,8 @@ public sealed class MineExpeditionManager
         MineExpedition? active = Active;
         if (hasFarmJob)
             return ActionProposalDecision.Reject("That NPC is already reserved by an active farm job.");
+        if (IsExternallyBusy(npc.Name))
+            return ActionProposalDecision.Reject("That NPC already has a meeting reservation.");
         if (active is not null && !active.NpcName.Equals(npc.Name, StringComparison.OrdinalIgnoreCase))
             return ActionProposalDecision.Reject($"{active.NpcName} is already in the active expedition.");
         if (active is not null && !AddsCapability(active, proposal.Action))
@@ -108,7 +120,8 @@ public sealed class MineExpeditionManager
         AgentActionProposal proposal,
         NPC npc,
         ActionProposalDecision decision,
-        string sourceTurnId)
+        string sourceTurnId,
+        MeetingExpeditionHandoff? handoff = null)
     {
         MineExpedition? active = Active;
         if (active is not null && active.NpcName.Equals(npc.Name, StringComparison.OrdinalIgnoreCase))
@@ -123,6 +136,7 @@ public sealed class MineExpeditionManager
                              proposal.Action == ActionIds.JoinMineExpedition && config.ExpeditionAutoMineOnJoin;
         MineExpedition expedition = new()
         {
+            SourceMeetingId = handoff?.MeetingId ?? "",
             ExpeditionId = $"exp_{Guid.NewGuid():N}"[..16],
             SourceTurnId = sourceTurnId,
             ProposalId = proposal.ProposalId,
@@ -147,7 +161,7 @@ public sealed class MineExpeditionManager
             RuntimePriorityTile = proposal.Action == ActionIds.MineTarget
                 ? ToActionTile(helper.Input.GetCursorPosition().GrabTile)
                 : null,
-            ReturnContext = new ActionReturnContext
+            ReturnContext = handoff?.ReturnContext ?? new ActionReturnContext
             {
                 LocationName = npc.currentLocation?.NameOrUniqueName ?? "",
                 TileX = (int)npc.Tile.X,
@@ -155,8 +169,8 @@ public sealed class MineExpeditionManager
                 FacingDirection = npc.FacingDirection,
                 FollowSchedule = npc.followSchedule
             },
-            OriginalAddedSpeed = npc.addedSpeed,
-            OriginalSpeed = npc.Speed,
+            OriginalAddedSpeed = handoff?.OriginalAddedSpeed ?? npc.addedSpeed,
+            OriginalSpeed = handoff?.OriginalSpeed ?? npc.Speed,
             LastCommandTurnId = sourceTurnId,
             LastCommandProposalId = proposal.ProposalId
         };
@@ -673,10 +687,8 @@ public sealed class MineExpeditionManager
 
     private void ReserveNpc(NPC npc, MineExpedition expedition)
     {
-        npc.controller = null;
-        npc.Halt();
-        // 清除 NPC 当前的特殊动画（例如山姆弹吉他），否则加入远征后还会保持原动画。
-        npc.Sprite.ClearAnimation();
+        NpcActivityReset.Stop(npc, helper);
+        NpcActivityReset.ReleaseConversationPause(npc, helper);
         npc.followSchedule = false;
         MaintainReservation(npc, expedition);
     }
@@ -1011,6 +1023,7 @@ public sealed class MineExpeditionManager
             timestamp = DateTimeOffset.UtcNow,
             event_name = "manual_target_selection",
             expedition_id = expedition.ExpeditionId,
+            source_meeting_id = expedition.SourceMeetingId,
             trial_id = expedition.ExpeditionId,
             save_id = expedition.SaveId,
             npc_name = expedition.NpcName,
@@ -1054,6 +1067,7 @@ public sealed class MineExpeditionManager
             root_turn_id = expedition.SourceTurnId,
             root_proposal_id = expedition.ProposalId,
             expedition_id = expedition.ExpeditionId,
+            source_meeting_id = expedition.SourceMeetingId,
             trial_id = expedition.ExpeditionId,
             save_id = expedition.SaveId,
             npc_name = expedition.NpcName,

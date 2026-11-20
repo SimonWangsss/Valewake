@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "enabled": false,
+  "npc_name": "REPLACE_WITH_INTERNAL_NPC_NAME",
+  "persona": {
+    "identity": "Describe the character's identity and background here.",
+    "personality": "Describe temperament, values and personal limitations.",
+    "speech_style": "Describe speech patterns without changing framework safety rules.",
+    "interests": ["Replace with a grounded interest"],
+    "relationships": ["Replace with a grounded relationship"]
+  }
+}

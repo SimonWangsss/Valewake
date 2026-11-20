@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Valewake/MeetingRules.cs" Link="MeetingRules.cs" />
+    <Compile Include="../../Valewake/ActionModels.cs" Link="ActionModels.cs" />
+    <Compile Include="../../Valewake/MineExpeditionModels.cs" Link="MineExpeditionModels.cs" />
+  </ItemGroup>
+</Project>

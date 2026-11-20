@@ -18,9 +18,10 @@ DEFAULT_PROFILE = {
 
 
 class PersonaRegistry:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, custom_profiles: dict | None = None):
         self.path = path
         self.profiles = self._load()
+        self.profiles.update(custom_profiles or {})
 
     def _load(self) -> dict[str, dict[str, Any]]:
         if not self.path.exists():
@@ -43,6 +44,11 @@ class PersonaRegistry:
         "mr. qi": "mr qi",
     }
 
+    @classmethod
+    def canonical_name(cls, name: str) -> str:
+        normalized = (name or "").strip().lower()
+        return cls._NAME_ALIASES.get(normalized, normalized)
+
     def get(
         self,
         npc_name: str,
@@ -50,8 +56,7 @@ class PersonaRegistry:
         runtime_age_group: str = "",
     ) -> dict[str, Any]:
         resolved_name = (npc_name or display_name or "Villager").strip()
-        lookup_name = self._NAME_ALIASES.get(resolved_name.lower(), resolved_name)
-        stored = self.profiles.get(lookup_name.lower(), {})
+        stored = self.profiles.get(self.canonical_name(resolved_name), {})
         stored_boundaries = stored.get("boundaries")
         boundaries = list(DEFAULT_PROFILE["boundaries"])
         if isinstance(stored_boundaries, list):
@@ -70,7 +75,7 @@ class PersonaRegistry:
             "boundaries": boundaries,
             "name": resolved_name,
             "display_name": display_name or stored.get("display_name") or resolved_name,
-            "profile_source": "curated" if stored else "generic_fallback",
+            "profile_source": stored.get("profile_source", "curated") if stored else "generic_fallback",
         }
         for key in ("interests", "relationships"):
             value = profile.get(key)

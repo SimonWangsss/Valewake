@@ -5,6 +5,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List
 
+from stardew_backend.persona import PersonaRegistry
+from stardew_backend.knowledge_policy import knowledge_allowed
+from stardew_backend.hybrid_retrieval import HybridTextIndex, token_list, character_ngrams
+
 
 TOPIC_MARKERS: dict[str, tuple[str, ...]] = {
     "identity": (
@@ -90,19 +94,6 @@ TOPIC_MARKERS: dict[str, tuple[str, ...]] = {
 }
 
 
-def token_list(text: str) -> list[str]:
-    normalized = (text or "").lower()
-    tokens = re.findall(r"[a-z0-9_]+", normalized)
-    for sequence in re.findall(r"[\u4e00-\u9fff]+", normalized):
-        if len(sequence) == 1:
-            tokens.append(sequence)
-            continue
-        tokens.extend(sequence[index:index + 2] for index in range(len(sequence) - 1))
-        if len(sequence) <= 8:
-            tokens.append(sequence)
-    return tokens
-
-
 def topic_tags(text: str) -> set[str]:
     normalized = re.sub(r"\s+", " ", (text or "").lower())
     compact = re.sub(r"\s+", "", normalized)
@@ -120,17 +111,6 @@ def topic_tags(text: str) -> set[str]:
     if inferred & {"capabilities", "safety", "prompt_injection", "out_of_world", "perception"}:
         inferred.add("boundaries")
     return inferred
-
-
-def character_ngrams(text: str, minimum: int = 2, maximum: int = 4) -> list[str]:
-    normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", (text or "").lower())
-    grams: list[str] = []
-    for size in range(minimum, maximum + 1):
-        grams.extend(
-            normalized[index:index + size]
-            for index in range(max(0, len(normalized) - size + 1))
-        )
-    return grams
 
 
 def tokenize(text: str) -> set[str]:
@@ -151,31 +131,49 @@ def score_text(query: str, text: str) -> float:
 
 
 class RagStore:
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, custom_chunks: list | None = None):
         self.directory = directory
         self.chunks = self._load_chunks()
+        self.chunks.extend(custom_chunks or [])
+        self.index = HybridTextIndex([self._searchable_text(c) for c in self.chunks],
+                                     [str(c.get("text", "")) for c in self.chunks])
         self.chunks_by_id = {
             str(chunk.get("id", "")): chunk
             for chunk in self.chunks
             if chunk.get("id")
         }
-        self.document_tokens = [token_list(self._searchable_text(chunk)) for chunk in self.chunks]
-        self.document_frequency = self._document_frequency()
-        self.average_length = (
-            sum(len(tokens) for tokens in self.document_tokens) / len(self.document_tokens)
-            if self.document_tokens else 1.0
-        )
-        self.document_ngrams = [
-            Counter(character_ngrams(self._searchable_text(chunk)))
-            for chunk in self.chunks
-        ]
-        self.ngram_frequency = self._ngram_document_frequency()
+        # Keep the existing diagnostics API without building a second index.
+        for name in (
+            "document_tokens", "document_counts", "document_token_sets",
+            "normalized_documents", "document_frequency", "average_length",
+            "document_ngrams", "ngram_frequency", "ngram_idf",
+            "unseen_ngram_idf", "document_ngram_norms", "document_concepts",
+        ):
+            setattr(self, name, getattr(self.index, name))
 
     def _load_chunks(self) -> List[Dict[str, Any]]:
         chunks: list[dict[str, Any]] = []
+        self.corpus_version = "legacy"
+        self.source_paths: list[Path] = []
         if not self.directory.exists():
             return chunks
-        for path in sorted(self.directory.glob("*.jsonl")):
+        manifest_path = self.directory / "corpus.json"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("schema_version") != 2 or not isinstance(manifest.get("files"), list):
+                raise ValueError("Invalid knowledge corpus manifest")
+            self.corpus_version = str(manifest["version"])
+            paths = []
+            for name in manifest["files"]:
+                path = (self.directory / name).resolve()
+                if self.directory.resolve() not in path.parents or path.suffix != ".jsonl":
+                    raise ValueError("Knowledge file must be a JSONL inside the corpus")
+                paths.append(path)
+        else:
+            paths = sorted(self.directory.glob("*.jsonl"))
+        self.source_paths = paths
+        seen = set()
+        for path in paths:
             for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
                 line = line.strip()
                 if not line:
@@ -187,6 +185,11 @@ class RagStore:
                 item.setdefault("source", path.name)
                 item.setdefault("tags", [])
                 item.setdefault("priority", 1)
+                if item.get("id") in seen:
+                    raise ValueError(f"Duplicate knowledge ID: {item.get('id')}")
+                seen.add(item.get("id"))
+                if self.corpus_version != "legacy" and item.get("content_kind") not in {"canonical_fact", "canonical_opinion", "experienced_event"}:
+                    raise ValueError(f"Non-knowledge content in active corpus: {item.get('id')}")
                 chunks.append(item)
         return chunks
 
@@ -211,49 +214,11 @@ class RagStore:
             frequency.update(grams.keys())
         return frequency
 
-    def _bm25(self, query_tokens: list[str], document_tokens: list[str]) -> float:
-        if not query_tokens or not document_tokens or not self.chunks:
-            return 0.0
-        counts = Counter(document_tokens)
-        score = 0.0
-        document_length = len(document_tokens)
-        for token in set(query_tokens):
-            term_frequency = counts.get(token, 0)
-            if term_frequency == 0:
-                continue
-            document_frequency = self.document_frequency.get(token, 0)
-            inverse_frequency = math.log(1 + (len(self.chunks) - document_frequency + 0.5) / (document_frequency + 0.5))
-            denominator = term_frequency + 1.5 * (1 - 0.75 + 0.75 * document_length / self.average_length)
-            score += inverse_frequency * term_frequency * 2.5 / denominator
-        return score
+    def _bm25(self, query_tokens: list[str], document_tokens: list[str], counts: Counter | None = None) -> float:
+        return self.index.bm25(query_tokens, document_tokens, counts)
 
-    def _ngram_cosine(self, query: str, document_index: int) -> float:
-        query_counts = Counter(character_ngrams(query))
-        document_counts = self.document_ngrams[document_index]
-        if not query_counts or not document_counts:
-            return 0.0
-
-        total_documents = max(1, len(self.chunks))
-        dot = 0.0
-        query_norm = 0.0
-        document_norm = 0.0
-        for gram, count in query_counts.items():
-            inverse_frequency = math.log(
-                1.0 + total_documents / (1.0 + self.ngram_frequency.get(gram, 0))
-            )
-            query_weight = count * inverse_frequency
-            query_norm += query_weight * query_weight
-            document_weight = document_counts.get(gram, 0) * inverse_frequency
-            dot += query_weight * document_weight
-        for gram, count in document_counts.items():
-            inverse_frequency = math.log(
-                1.0 + total_documents / (1.0 + self.ngram_frequency.get(gram, 0))
-            )
-            weight = count * inverse_frequency
-            document_norm += weight * weight
-        if query_norm <= 0 or document_norm <= 0:
-            return 0.0
-        return dot / math.sqrt(query_norm * document_norm)
+    def _ngram_cosine(self, query: str, document_index: int, query_counts: Counter | None = None) -> float:
+        return self.index.ngram_cosine(query, document_index, query_counts)
 
     def search_details(
         self,
@@ -261,18 +226,20 @@ class RagStore:
         top_k: int,
         tags: list[str] | None = None,
         npc_name: str = "",
+        game_state: dict | None = None,
     ) -> List[Dict[str, Any]]:
         context_tags = {str(tag).lower() for tag in (tags or [])}
         inferred_tags = topic_tags(query)
-        query_tokens = token_list(query)
+        prepared = self.index.prepare(query)
         scored: list[tuple[float, dict[str, Any]]] = []
         for index, chunk in enumerate(self.chunks):
             if not self._is_chunk_allowed_for_npc(chunk, npc_name):
                 continue
-            searchable = self._searchable_text(chunk)
-            bm25 = self._bm25(query_tokens, self.document_tokens[index])
-            lexical = score_text(query, searchable)
-            vector = self._ngram_cosine(query, index)
+            if not knowledge_allowed(chunk, game_state):
+                continue
+            features = self.index.score(prepared, index)
+            if self.corpus_version != "legacy" and not features["relevance"]:
+                continue
             chunk_tags = {str(tag).lower() for tag in chunk.get("tags", [])}
             inferred_matches = inferred_tags & chunk_tags
             context_matches = context_tags & chunk_tags
@@ -288,9 +255,7 @@ class RagStore:
             )
             priority_score = max(0, min(3, int(chunk.get("priority", 1) or 1))) * 0.04
             score = (
-                bm25 / (bm25 + 3.0)
-                + lexical * 0.32
-                + vector * 0.58
+                features["relevance"]
                 + topic_score
                 + critical_score
                 + min(0.24, context_score)
@@ -299,7 +264,7 @@ class RagStore:
             if score > 0.08:
                 scored.append((score, chunk))
         scored.sort(key=lambda item: item[0], reverse=True)
-        selected = self._with_parent_context(scored, max(0, top_k), npc_name)
+        selected = self._with_parent_context(scored, max(0, top_k), npc_name, game_state)
         return [
             {
                 "id": str(chunk.get("id", "")),
@@ -307,6 +272,11 @@ class RagStore:
                 "text": str(chunk.get("text", "")),
                 "tags": list(chunk.get("tags", [])),
                 "source": str(chunk.get("source", "")),
+                "source_url": str(chunk.get("source_url", "")),
+                "review_status": str(chunk.get("review_status", "legacy")),
+                "content_kind": str(chunk.get("content_kind", "legacy")),
+                "conditions": chunk.get("conditions", {}),
+                "sources": chunk.get("sources", []),
                 "parent_id": str(chunk.get("parent_id", "")),
                 "score": round(score, 6),
                 "matched_query_tags": sorted(inferred_tags & {
@@ -322,6 +292,7 @@ class RagStore:
         scored: list[tuple[float, dict[str, Any]]],
         top_k: int,
         npc_name: str = "",
+        game_state: dict | None = None,
     ) -> list[tuple[float, dict[str, Any]]]:
         if top_k <= 0:
             return []
@@ -337,7 +308,7 @@ class RagStore:
             parent_id = str(chunk.get("parent_id", ""))
             if parent_id and parent_id not in seen:
                 parent = self.chunks_by_id.get(parent_id)
-                if parent is not None and self._is_chunk_allowed_for_npc(parent, npc_name):
+                if parent is not None and self._is_chunk_allowed_for_npc(parent, npc_name) and knowledge_allowed(parent, game_state):
                     parent_score = scores_by_id.get(parent_id, score * 0.92)
                     selected.append((parent_score, parent))
                     seen.add(parent_id)
@@ -352,9 +323,11 @@ class RagStore:
 
     @staticmethod
     def _is_chunk_allowed_for_npc(chunk: Dict[str, Any], npc_name: str) -> bool:
-        target = (npc_name or "").strip().lower()
-        explicit_npc = str(chunk.get("npc", "")).strip().lower()
+        target = PersonaRegistry.canonical_name(npc_name)
+        explicit_npc = PersonaRegistry.canonical_name(str(chunk.get("npc", "")))
         if explicit_npc:
+            if chunk.get("schema_version") == 2 and not target:
+                return False
             return not target or explicit_npc == target
 
         # Legacy Abigail chunks predate the explicit npc field.
@@ -369,10 +342,11 @@ class RagStore:
         top_k: int,
         tags: list[str] | None = None,
         npc_name: str = "",
+        game_state: dict | None = None,
     ) -> List[str]:
         return [
             item["formatted"]
-            for item in self.search_details(query, top_k, tags, npc_name)
+            for item in self.search_details(query, top_k, tags, npc_name, game_state)
         ]
 
 

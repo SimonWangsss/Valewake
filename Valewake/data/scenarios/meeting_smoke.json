@@ -1,0 +1,23 @@
+{
+  "scenario_id": "meeting_smoke",
+  "save_allowlist": [],
+  "npc": "Alex",
+  "days": [
+    {
+      "day": 1,
+      "time": 1200,
+      "location": "Farm",
+      "chat_input": "明天傍晚六点我们一起去海边锻炼，好吗？",
+      "wait_terminal_ticks": 3000,
+      "expect_action": "schedule_meeting"
+    },
+    {
+      "day": 2,
+      "time": 1900,
+      "location": "Beach",
+      "chat_input": "我来了，你在吗？",
+      "wait_terminal_ticks": 3000,
+      "expect_action": ""
+    }
+  ]
+}

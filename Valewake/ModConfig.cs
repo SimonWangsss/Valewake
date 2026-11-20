@@ -33,6 +33,7 @@ public sealed class ModConfig
     public bool EnableNativeImeCandidateWindow { get; set; } = true;
     public bool PreserveVanillaFirstDialogue { get; set; } = true;
     public int MaxConversationHistoryMessages { get; set; } = 12;
+    public int MaxChatInputCharacters { get; set; } = 600;
     public bool EnableAiFriendshipChanges { get; set; } = true;
     public int FriendshipPointsPerIntensity { get; set; } = 5;
     public int MaxAiFriendshipGainPerDay { get; set; } = 10;
@@ -41,6 +42,19 @@ public sealed class ModConfig
     public bool ShowRelationshipFeedback { get; set; } = true;
     public bool ShowNumericFriendshipChange { get; set; } = false;
     public bool EnableActionAgent { get; set; } = true;
+    public int MeetingMinimumLeadMinutes { get; set; } = 30;
+    public int MeetingEndTime { get; set; } = 2200;
+    public int MeetingFollowDistanceTiles { get; set; } = 2;
+    public int MeetingApproachRadiusTiles { get; set; } = 12;
+    public int MeetingFollowSpeedBoost { get; set; }
+    public int MeetingFollowMaxSpeed { get; set; } = 4;
+    public int MeetingCatchUpMaxSpeed { get; set; } = 5;
+    public int MeetingFollowRecoveryGraceTicks { get; set; } = 180;
+    public int MeetingFollowRepathTicks { get; set; } = 45;
+    public int MeetingCatchUpDistanceTiles { get; set; } = 16;
+    public int MeetingStallRecoveryTicks { get; set; } = 180;
+    public int MeetingCrossMapCatchUpTicks { get; set; } = 90;
+    public int MeetingCatchUpCooldownTicks { get; set; } = 180;
     public bool EnableWaterCropsAction { get; set; } = true;
     public bool EnableClearWeedsAction { get; set; } = true;
     public bool EnableChopTreesAction { get; set; } = true;
@@ -72,4 +86,15 @@ public sealed class ModConfig
     public int ExpeditionEndTime { get; set; } = 2300;
     public int ExpeditionTargetSnapRadiusTiles { get; set; } = 1;
     public SButton ExpeditionTargetButton { get; set; } = SButton.G;
+
+    // Scenario test runner (Track B). Disabled by default; normal play is unaffected while TestMode=false.
+    public bool TestMode { get; set; } = false;
+    public bool TestAutoRun { get; set; } = false;
+    public bool TestAutoConfirm { get; set; } = true;
+    public string TestAutoLoadSave { get; set; } = "";
+    public string TestScenarioFile { get; set; } = "data/scenarios/seven_day_smoke.json";
+    public string[] TestSaveAllowlist { get; set; } = Array.Empty<string>();
+    public string[] TestSaveQueue { get; set; } = Array.Empty<string>();
+    public int TestWaitTerminalTicks { get; set; } = 7200;
+    public bool TestAutoExitAfterRun { get; set; } = false;
 }

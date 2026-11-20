@@ -1,0 +1,15 @@
+{
+  "scenario_id": "farm_trees_7d",
+  "save_allowlist": ["MooMooM_430258472"],
+  "npc": "Emily",
+  "trials": 3,
+  "days": [
+    { "day": 1, "time": 900, "location": "Farm", "npc_location": "Farm", "seed": { "trees": 0 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 9000, "expect_action": "chop_trees", "expect_targets": { "min": 0, "max": 0 } },
+    { "day": 2, "time": 900, "location": "Farm", "npc_location": "Farm", "seed": { "trees": 1 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 9000, "expect_action": "chop_trees", "expect_targets": { "min": 1, "max": 1 } },
+    { "day": 3, "time": 900, "location": "Farm", "npc_location": "Farm", "seed": { "trees": 3 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 9000, "expect_action": "chop_trees", "expect_targets": { "min": 3, "max": 3 } },
+    { "day": 4, "time": 900, "location": "Farm", "npc_location": "Farm", "seed": { "trees": 6 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 9000, "expect_action": "chop_trees", "expect_targets": { "min": 3, "max": 3 } },
+    { "day": 5, "time": 900, "location": "Farm", "npc_location": "Farm", "seed": { "trees": 2, "saplings": 1 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 9000, "expect_action": "chop_trees", "expect_targets": { "min": 2, "max": 2 } },
+    { "day": 6, "time": 900, "location": "Farm", "npc_location": "Farm", "seed": { "trees": 3, "stumps": 1 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 9000, "expect_action": "chop_trees", "expect_targets": { "min": 3, "max": 3 } },
+    { "day": 7, "time": 900, "location": "Farm", "npc_location": "Farm", "seed": { "trees": 1, "tapped_trees": 1 }, "chat_input": "帮我砍树。", "wait_terminal_ticks": 9000, "expect_action": "chop_trees", "expect_targets": { "min": 1, "max": 1 } }
+  ]
+}

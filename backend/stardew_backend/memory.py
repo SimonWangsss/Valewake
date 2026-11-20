@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from uuid import uuid4
 
 from stardew_backend.retrieval import score_text
+from stardew_backend.hybrid_retrieval import HybridTextIndex
 
 
 class MemoryStore:
@@ -16,6 +17,7 @@ class MemoryStore:
         self.checkpoint_path = path.with_name(f"{path.stem}.committed{path.suffix}")
         self.max_episodes_per_session = max(20, max_episodes_per_session)
         self._lock = RLock()
+        self._retrieval_cache = None
         self.data = self._load_path(self.path)
         if not self.checkpoint_path.exists():
             self._write(self.checkpoint_path, self.data)
@@ -229,19 +231,15 @@ class MemoryStore:
     def search(self, query: str, session_id: str, top_k: int, game_day: int | None = None) -> List[str]:
         scored: list[tuple[float, dict[str, Any]]] = []
         with self._lock:
-            for item in self.data["memories"]:
-                if item.get("session_id") != session_id:
-                    continue
-                if item.get("status", "active") != "active":
-                    continue
-                text = str(item.get("text", ""))
-                searchable = " ".join([
-                    text,
-                    str(item.get("evidence", "")),
-                    str(item.get("kind", "")),
-                    str(item.get("canonical_key", "")),
-                ])
-                relevance = score_text(query, searchable)
+            eligible = [m for m in self.data["memories"] if m.get("session_id") == session_id and m.get("status", "active") == "active"]
+            texts = tuple(str(m.get("text", "")) + " " + str(m.get("evidence", "")) for m in eligible)
+            key = (session_id, texts)
+            if self._retrieval_cache is None or self._retrieval_cache[0] != key:
+                self._retrieval_cache = (key, HybridTextIndex(list(texts)))
+            index = self._retrieval_cache[1]
+            prepared = index.prepare(query)
+            for position, item in enumerate(eligible):
+                relevance = index.score(prepared, position)["relevance"]
                 if relevance <= 0:
                     continue
                 importance = max(1, min(3, int(item.get("importance", 1) or 1)))

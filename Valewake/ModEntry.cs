@@ -22,8 +22,10 @@ public sealed class ModEntry : Mod
     private ActionJobManager? actionJobManager;
     private MineExpeditionManager? mineExpeditionManager;
     private MeetingManager? meetingManager;
+    private ScenarioRunner? scenarioRunner;
     private readonly ConcurrentQueue<Action> mainThreadActions = new();
     private readonly List<AgentConversationMessage> conversationHistory = new();
+    private int journalSession;
     private Task memorySessionReady = Task.CompletedTask;
     private NPC? activeChatNpc;
     private NPC? pendingVanillaNpc;
@@ -31,6 +33,9 @@ public sealed class ModEntry : Mod
     private int pendingVanillaStartedTick;
     private string pendingVanillaLine = "";
     private string lastTurnId = "";
+    private bool testAutoLoadDone;
+    private int testAutoLoadCounter;
+    private int testSaveQueueIndex;
 
     public override void Entry(IModHelper helper)
     {
@@ -49,6 +54,25 @@ public sealed class ModEntry : Mod
         actionJobManager = new ActionJobManager(helper, Monitor, Config);
         mineExpeditionManager = new MineExpeditionManager(helper, Monitor, Config);
         meetingManager = new MeetingManager(helper, Monitor, Config);
+        VanillaDialogueObserver.Install(ModManifest.UniqueID + ".vanilla-dialogue", Monitor,
+            entry => { _ = SendTraceEventSafeAsync("vanilla_dialogue_observed", new { entry.event_id, npc_name = entry.npc, entry.speaker,
+                entry.kind, entry.source, entry.story_event_id, entry.text, entry.game_day, entry.game_time,
+                save_id = Constants.SaveFolderName }); });
+        NpcInteractionJournal.Install(ModManifest.UniqueID + ".gift-events", Monitor,
+            entry => { _ = SendTraceEventSafeAsync("npc_gift_received", new { entry.event_id, entry.kind, entry.source,
+                npc_name = entry.npc, entry.game_day, entry.game_time, entry.item_id, entry.item_name, entry.gift_taste,
+                save_id = Constants.SaveFolderName, session_prefix = $"{Constants.SaveFolderName}:" }); });
+        meetingManager.IsExternallyBusy = name => actionJobManager.HasActiveJob(name) || mineExpeditionManager.IsNpcBusy(name);
+        actionJobManager.IsExternallyBusy = name => meetingManager.HasScheduledMeeting(name) || mineExpeditionManager.IsNpcBusy(name);
+        mineExpeditionManager.IsExternallyBusy = name => meetingManager.BlocksExpedition(name);
+        scenarioRunner = new ScenarioRunner(
+            helper,
+            Monitor,
+            Config,
+            actionJobManager,
+            mineExpeditionManager,
+            (npc, input) => SendChatToBackendAsync(input, npc, Array.Empty<AgentConversationMessage>(), false)
+        );
 
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
@@ -73,6 +97,26 @@ public sealed class ModEntry : Mod
             $"Send a message to the nearest supported NPC. Usage: {Config.ChatCommandName} <message>",
             OnChatCommand
         );
+
+        helper.ConsoleCommands.Add("agent_npcs", "Export runtime NPC names for custom persona packs. Load a save first.",
+            (_, _) =>
+            {
+                if (!Context.IsWorldReady)
+                {
+                    Monitor.Log("Load a save before exporting NPC names.", LogLevel.Warn);
+                    return;
+                }
+                var entries = Utility.getAllCharacters().GroupBy(npc => npc.Name, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First()).OrderBy(npc => npc.Name)
+                    .Select(npc => new { npc_name = npc.Name, display_name = npc.displayName,
+                        can_socialize = npc.CanSocialize, chat_enabled = IsConfiguredTarget(npc),
+                        age_group = npc.Age switch { 2 => "child", 1 => "teen", _ => "adult" },
+                        current_location = npc.currentLocation?.NameOrUniqueName ?? "" }).ToArray();
+                Helper.Data.WriteJsonFile("data/npc_catalog.json", entries);
+                foreach (var entry in entries)
+                    Monitor.Log($"NPC '{entry.npc_name}' | {entry.display_name} | social={entry.can_socialize} | chat={entry.chat_enabled}", LogLevel.Info);
+                Monitor.Log("NPC catalog exported to data/npc_catalog.json. Bind pack npc_name to the exact internal name, not display_name.", LogLevel.Info);
+            });
 
         helper.ConsoleCommands.Add(
             "agent_jobs",
@@ -103,6 +147,14 @@ public sealed class ModEntry : Mod
             "Annotate the latest AI turn. Usage: agent_mark <keep|reject|boundary|memory_good|memory_bad|action_good|action_bad> [note]",
             OnMarkCommand
         );
+
+        helper.ConsoleCommands.Add("agent_meetings", "List meetings; agent_meetings cancel cancels current meetings; agent_meetings end <NPC> ends an active meeting.",
+            (_, args) =>
+            {
+                if (args.Length > 0 && args[0].Equals("cancel", StringComparison.OrdinalIgnoreCase)) meetingManager?.CancelAll();
+                if (args.Length > 1 && args[0].Equals("end", StringComparison.OrdinalIgnoreCase)) meetingManager?.EndForNpc(args[1]);
+                Monitor.Log(meetingManager?.GetSummary() ?? "Meeting manager unavailable.", LogLevel.Info);
+            });
 
         helper.ConsoleCommands.Add(
             "agent_expedition",
@@ -177,6 +229,59 @@ public sealed class ModEntry : Mod
     {
         backendClient?.Dispose();
         backendProcessManager?.Dispose();
+    }
+
+    private void TryAutoLoadTestSave()
+    {
+        if (!Config.TestMode || testAutoLoadDone)
+            return;
+        string? save = GetNextTestSave();
+        if (string.IsNullOrWhiteSpace(save))
+            return;
+        if (Context.IsWorldReady || Game1.activeClickableMenu is not TitleMenu)
+            return;
+        testAutoLoadCounter++;
+        if (testAutoLoadCounter < 180)
+            return;
+        testAutoLoadDone = true;
+        try
+        {
+            Game1.activeClickableMenu = null;
+            SaveGame.Load(save);
+            Monitor.Log($"TestMode: auto-loading save '{save}'...", LogLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"TestMode: auto-load failed: {ex.Message}", LogLevel.Error);
+        }
+    }
+
+    private string? GetNextTestSave()
+    {
+        if (Config.TestSaveQueue.Length > 0)
+        {
+            return testSaveQueueIndex < Config.TestSaveQueue.Length
+                ? Config.TestSaveQueue[testSaveQueueIndex]
+                : null;
+        }
+        return string.IsNullOrWhiteSpace(Config.TestAutoLoadSave) ? null : Config.TestAutoLoadSave;
+    }
+
+    private void TryAdvanceTestSaveQueue()
+    {
+        if (!Config.TestMode || scenarioRunner is null || !scenarioRunner.IsDone)
+            return;
+
+        scenarioRunner.OnReturnedToTitle();
+        if (Config.TestSaveQueue.Length == 0 || testSaveQueueIndex >= Config.TestSaveQueue.Length - 1)
+        {
+            Monitor.Log("TestMode: all queued saves completed.", LogLevel.Info);
+            return;
+        }
+
+        testSaveQueueIndex++;
+        Monitor.Log($"TestMode: advancing to next save '{Config.TestSaveQueue[testSaveQueueIndex]}'.", LogLevel.Info);
+        Game1.ExitToTitle();
     }
 
     private static readonly (string Id, string Name, string Url, string Format)[] LlmProviders =
@@ -344,12 +449,15 @@ public sealed class ModEntry : Mod
 
     private void OnSaveLoaded(object? sender, SaveLoadedEventArgs e)
     {
+        VanillaDialogueObserver.Reset();
+        journalSession++;
         lastTurnId = "";
         memorySessionReady = RollbackCurrentSaveMemoryAsync("save_loaded_rollback");
         relationshipManager?.Load();
         actionJobManager?.Load();
         mineExpeditionManager?.Load();
         meetingManager?.Load();
+        scenarioRunner?.OnSaveLoaded();
         Monitor.Log($"Save loaded for {Game1.player.Name} on {Game1.player.farmName.Value} Farm.", LogLevel.Info);
         LogSnapshot("Initial save snapshot");
     }
@@ -361,11 +469,15 @@ public sealed class ModEntry : Mod
 
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
     {
+        scenarioRunner?.OnDayStarted();
         LogSnapshot("Day started");
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
     {
+        VanillaDialogueObserver.Observe(Game1.activeClickableMenu as DialogueBox);
+        TryAutoLoadTestSave();
+
         while (mainThreadActions.TryDequeue(out Action? action))
         {
             try
@@ -381,6 +493,8 @@ public sealed class ModEntry : Mod
         actionJobManager?.Update();
         mineExpeditionManager?.Update();
         meetingManager?.Update();
+        scenarioRunner?.OnUpdateTicked();
+        TryAdvanceTestSaveQueue();
 
         if (pendingVanillaNpc is not null &&
             !pendingVanillaDialogueSeen &&
@@ -414,6 +528,11 @@ public sealed class ModEntry : Mod
 
     private void OnReturnedToTitle(object? sender, ReturnedToTitleEventArgs e)
     {
+        VanillaDialogueObserver.Reset();
+        journalSession++;
+        scenarioRunner?.OnReturnedToTitle();
+        testAutoLoadDone = false;
+        testAutoLoadCounter = 0;
         string saveFolder = Constants.SaveFolderName ?? "";
         if (!string.IsNullOrWhiteSpace(saveFolder))
             _ = RollbackMemoryAsync($"{saveFolder}:", "save_rolled_back");
@@ -464,6 +583,7 @@ public sealed class ModEntry : Mod
 
     private void OnMenuChanged(object? sender, MenuChangedEventArgs e)
     {
+        VanillaDialogueObserver.Observe(e.NewMenu as DialogueBox);
         if (pendingVanillaNpc is null)
             return;
 
@@ -560,6 +680,21 @@ public sealed class ModEntry : Mod
         IReadOnlyCollection<AgentConversationMessage> recentHistory,
         bool continueConversation)
     {
+        if (MeetingRules.IsJoinRequest(playerInput) && meetingManager?.CanJoinTravel(npc) == true)
+        {
+            ShowJoinMeetingConfirmation(npc);
+            return;
+        }
+        if (MeetingRules.IsEndRequest(playerInput) && meetingManager?.HasActiveMeeting(npc.Name) == true)
+        {
+            ShowEndMeetingConfirmation(npc, playerInput);
+            return;
+        }
+        ulong journalSave = Game1.uniqueIDForThisGame;
+        long journalPlayer = Game1.player.UniqueMultiplayerID;
+        int journalDay = Game1.Date.TotalDays;
+        int journalTime = Game1.timeOfDay;
+        int requestJournalSession = journalSession;
         if (backendClient is null)
         {
             Monitor.Log("Backend client is not initialized.", LogLevel.Error);
@@ -584,6 +719,7 @@ public sealed class ModEntry : Mod
         await memorySessionReady;
 
         NpcPerceptionSnapshot npcPerception = NpcPerceptionSnapshot.FromGame(npc);
+        meetingManager?.MarkInteraction(npc.Name);
         AgentRelationshipContext agentRelationship =
             relationshipManager?.GetContext(npc.Name) ?? new AgentRelationshipContext();
         var gameState = new
@@ -610,7 +746,13 @@ public sealed class ModEntry : Mod
                 name = Game1.player.Name
             },
             npc_perception = npcPerception,
+            npc_events = NpcInteractionJournal.ForNpc(Game1.player, npc.Name),
+            npc_dialogue_events = VanillaDialogueJournal.ForNpc(Game1.player, npc.Name),
+            knowledge_state = new { seen_event_ids = Game1.player.eventsSeen.ToArray() },
             agent_relationship = agentRelationship,
+            execution_facts = (actionJobManager?.GetNpcFacts(npc.Name) ?? Array.Empty<object>())
+                .Concat(mineExpeditionManager?.GetNpcFacts(npc.Name) ?? Array.Empty<object>())
+                .Concat(meetingManager?.GetNpcFacts(npc.Name) ?? Array.Empty<object>()).ToArray(),
             action_rules = new
             {
                 enabled = Config.EnableActionAgent,
@@ -624,6 +766,7 @@ public sealed class ModEntry : Mod
                 current_trust = agentRelationship.Trust,
                 request_attempt_limit = Math.Max(1, Config.ActionRequestAttemptLimit),
                 current_time = Game1.timeOfDay,
+                meeting_minimum_lead_minutes = Math.Max(10, Config.MeetingMinimumLeadMinutes),
                 farm_end_time = 2200,
                 expedition_end_time = Config.ExpeditionEndTime,
                 is_host = Context.IsMainPlayer,
@@ -656,7 +799,8 @@ public sealed class ModEntry : Mod
 
             mainThreadActions.Enqueue(() =>
             {
-                if (!Context.IsWorldReady)
+                if (!Context.IsWorldReady || journalSession != requestJournalSession || Game1.uniqueIDForThisGame != journalSave ||
+                    Game1.player.UniqueMultiplayerID != journalPlayer)
                     return;
                 lastTurnId = response.TurnId;
                 NPC currentNpc = Game1.getCharacterFromName(npc.Name) ?? npc;
@@ -675,9 +819,6 @@ public sealed class ModEntry : Mod
                         reason = relationshipResult.Reason
                     });
                 }
-                if (continueConversation && IsActiveChatNpc(currentNpc))
-                    AddConversationMessage("assistant", response.Reply);
-
                 ActionProposalDecision? actionDecision = null;
                 bool isMineAction = response.ActionProposal is not null && ActionIds.IsMineAction(response.ActionProposal.Action);
                 if (response.ActionProposal is not null && isMineAction && mineExpeditionManager is not null)
@@ -689,6 +830,11 @@ public sealed class ModEntry : Mod
                         relationshipManager?.GetContext(currentNpc.Name) ?? new AgentRelationshipContext(),
                         actionJobManager?.HasActiveJob(currentNpc.Name) == true
                     );
+                    if (actionDecision.Allowed && meetingManager?.PrepareExpeditionHandoff(currentNpc.Name) is not null)
+                        actionDecision = ActionProposalDecision.Allow(
+                            LocalizedContentManager.CurrentLanguageCode == LocalizedContentManager.LanguageCode.zh || Regex.IsMatch(playerInput, @"[\u4e00-\u9fff]")
+                                ? $"结束当前约会或返程安排，改为让 {currentNpc.displayName} 陪你下矿吗？"
+                                : $"End this meeting or return journey and have {currentNpc.displayName} join your mine expedition?", actionDecision.MaxTargets);
                     mineExpeditionManager.TraceProposalDecision(
                         response.ActionProposal,
                         currentNpc,
@@ -706,6 +852,8 @@ public sealed class ModEntry : Mod
                         playerInput,
                         relationshipManager?.GetContext(currentNpc.Name) ?? new AgentRelationshipContext()
                     );
+                    meetingManager.TraceDecision(response.ActionProposal, currentNpc, response.TurnId,
+                        "proposal_validated", actionDecision.Allowed, actionDecision.Message);
                     Monitor.Log(
                         actionDecision.Allowed
                             ? $"Meeting proposal validated: {response.ActionProposal.Action}"
@@ -715,7 +863,10 @@ public sealed class ModEntry : Mod
                 }
                 else if (response.ActionProposal is not null && actionJobManager is not null)
                 {
-                    actionDecision = actionJobManager.Evaluate(
+                    actionDecision = meetingManager?.HasScheduledMeeting(currentNpc.Name) == true ||
+                        mineExpeditionManager?.IsNpcBusy(currentNpc.Name) == true
+                        ? ActionProposalDecision.Reject("这个角色已有约会或同行安排，先结束当前安排吧。")
+                        : actionJobManager.Evaluate(
                         response.ActionProposal,
                         currentNpc,
                         playerInput,
@@ -735,6 +886,41 @@ public sealed class ModEntry : Mod
                     );
                 }
 
+                string displayReply = response.Reply;
+                if (isMineAction && actionDecision?.Allowed == false)
+                {
+                    displayReply = MeetingRules.MineRejectionReply(actionDecision.Message,
+                        LocalizedContentManager.CurrentLanguageCode == LocalizedContentManager.LanguageCode.zh || Regex.IsMatch(playerInput, @"[\u4e00-\u9fff]"));
+                    _ = SendTraceEventSafeAsync("mine_reply_reconciled", new { turn_id = response.TurnId,
+                        npc_name = currentNpc.Name, reason = actionDecision.Message, original_reply = response.Reply, displayed_reply = displayReply });
+                }
+                if (response.ActionProposal?.Action == ActionIds.ScheduleMeeting && actionDecision is not null && !actionDecision.Allowed)
+                {
+                    displayReply = MeetingRules.RejectionReply(actionDecision.Message,
+                        LocalizedContentManager.CurrentLanguageCode == LocalizedContentManager.LanguageCode.zh);
+                    _ = SendTraceEventSafeAsync("meeting_reply_reconciled", new { turn_id = response.TurnId,
+                        npc_name = currentNpc.Name, allowed = false, reason = actionDecision.Message,
+                        original_reply = response.Reply, displayed_reply = displayReply, reconciliation_style = "in_character_replacement" });
+                }
+                if (Game1.Date.TotalDays == journalDay)
+                    DailyDialogueJournal.Append(currentNpc.Name, journalTime, playerInput, displayReply);
+                if (continueConversation && IsActiveChatNpc(currentNpc)) AddConversationMessage("assistant", displayReply);
+
+                if (Config.TestMode && Config.TestAutoConfirm && scenarioRunner is not null && scenarioRunner.IsRunning)
+                {
+                    bool accepted = response.ActionProposal is not null && actionDecision?.Allowed == true;
+                    if (accepted)
+                        AcceptProposal(currentNpc, response.ActionProposal!, actionDecision!, response.TurnId, playerInput);
+                    scenarioRunner.NotifyChatResult(
+                        currentNpc.Name,
+                        response.TurnId,
+                        response.Reply,
+                        response.ActionProposal?.Action ?? "",
+                        accepted
+                    );
+                    return;
+                }
+
                 Action? afterDialogue = continueConversation && IsActiveChatNpc(currentNpc)
                     ? () => OpenChatInput(currentNpc)
                     : null;
@@ -747,19 +933,20 @@ public sealed class ModEntry : Mod
                         proposal,
                         decision,
                         continueConversation,
-                        response.TurnId
+                        response.TurnId,
+                        playerInput
                     );
                 }
                 ShowNpcDialogue(
                     currentNpc,
-                    ApplyPortraitEmotion(response.Reply, response.Emotion),
+                    ApplyPortraitEmotion(displayReply, actionDecision?.Allowed == false ? "neutral" : response.Emotion),
                     afterDialogue
                 );
                 if (Config.ShowRelationshipFeedback && relationshipResult?.WasApplied == true)
                     Game1.addHUDMessage(new HUDMessage(relationshipResult.Feedback));
                 if (response.ActionProposal is not null &&
                     actionDecision is not null &&
-                    !actionDecision.Allowed)
+                    !actionDecision.Allowed && response.ActionProposal.Action != ActionIds.ScheduleMeeting && !isMineAction)
                 {
                     Game1.addHUDMessage(new HUDMessage($"Job not started: {actionDecision.Message}"));
                 }
@@ -852,11 +1039,30 @@ public sealed class ModEntry : Mod
         }
     }
 
+    private MineExpedition? TryAcceptMineProposal(NPC npc, AgentActionProposal proposal, string turnId, string input)
+    {
+        if (!Context.IsWorldReady || mineExpeditionManager is null) return null;
+        ActionProposalDecision fresh = mineExpeditionManager.Evaluate(proposal, npc, input,
+            relationshipManager?.GetContext(npc.Name) ?? new AgentRelationshipContext(), actionJobManager?.HasActiveJob(npc.Name) == true);
+        if (!fresh.Allowed)
+        {
+            mineExpeditionManager.TraceProposalDecision(proposal, npc, fresh, turnId);
+            Game1.addHUDMessage(new HUDMessage(MeetingRules.MineRejectionReply(fresh.Message,
+                LocalizedContentManager.CurrentLanguageCode == LocalizedContentManager.LanguageCode.zh || Regex.IsMatch(input, @"[\u4e00-\u9fff]"))));
+            return null;
+        }
+        MeetingExpeditionHandoff? handoff = meetingManager?.PrepareExpeditionHandoff(npc.Name);
+        MineExpedition expedition = mineExpeditionManager.Accept(proposal, npc, fresh, turnId, handoff);
+        if (handoff is not null) meetingManager!.CompleteExpeditionHandoff(handoff, expedition.ExpeditionId);
+        return expedition;
+    }
+
     private void AcceptProposal(
         NPC npc,
         AgentActionProposal proposal,
         ActionProposalDecision decision,
-        string sourceTurnId)
+        string sourceTurnId,
+        string playerInput)
     {
         bool isMineAction = ActionIds.IsMineAction(proposal.Action);
         bool isMeeting = proposal.Action == ActionIds.ScheduleMeeting;
@@ -870,7 +1076,8 @@ public sealed class ModEntry : Mod
         {
             mineExpeditionManager!.TraceConfirmation(proposal, npc, true, sourceTurnId);
             bool upgraded = mineExpeditionManager!.HasActiveExpedition;
-            MineExpedition expedition = mineExpeditionManager!.Accept(proposal, npc, decision, sourceTurnId);
+            MineExpedition? expedition = TryAcceptMineProposal(npc, proposal, sourceTurnId, playerInput);
+            if (expedition is null) return;
             Game1.addHUDMessage(new HUDMessage(
                 upgraded
                     ? $"已为 {npc.displayName} 的同行任务追加能力：{proposal.Action}。"
@@ -879,7 +1086,8 @@ public sealed class ModEntry : Mod
         }
         else if (isMeeting)
         {
-            meetingManager!.Accept(proposal, npc, decision, sourceTurnId);
+            meetingManager!.TraceDecision(proposal, npc, sourceTurnId, "confirmation_accepted", true, "Player confirmed.");
+            if (meetingManager!.Accept(proposal, npc, decision, sourceTurnId) is null) return;
             Game1.addHUDMessage(new HUDMessage($"已和 {npc.displayName} 约好见面，到时会通知你。"));
         }
         else
@@ -896,7 +1104,8 @@ public sealed class ModEntry : Mod
         AgentActionProposal proposal,
         ActionProposalDecision decision,
         bool continueConversation,
-        string sourceTurnId)
+        string sourceTurnId,
+        string playerInput)
     {
         bool isMineAction = ActionIds.IsMineAction(proposal.Action);
         bool isMeeting = proposal.Action == ActionIds.ScheduleMeeting;
@@ -906,12 +1115,21 @@ public sealed class ModEntry : Mod
              : actionJobManager is null))
             return;
 
+        int confirmationSession = journalSession;
+        ulong confirmationSave = Game1.uniqueIDForThisGame;
+        long confirmationPlayer = Game1.player.UniqueMultiplayerID;
+        if (isMeeting) meetingManager!.TraceDecision(proposal, npc, sourceTurnId, "confirmation_shown", true, "Opening player confirmation.");
         Game1.currentLocation.createQuestionDialogue(
             decision.ConfirmationQuestion,
             Game1.currentLocation.createYesNoResponses(),
             (_, answer) =>
             {
                 bool confirmed = string.Equals(answer, "Yes", StringComparison.OrdinalIgnoreCase);
+                if (!Context.IsWorldReady || journalSession != confirmationSession || Game1.uniqueIDForThisGame != confirmationSave ||
+                    Game1.player.UniqueMultiplayerID != confirmationPlayer) return;
+                if (isMeeting)
+                    meetingManager!.TraceDecision(proposal, npc, sourceTurnId,
+                        confirmed ? "confirmation_accepted" : "confirmation_declined", confirmed, "Player confirmation.");
                 if (!isMeeting)
                 {
                     if (isMineAction)
@@ -924,7 +1142,8 @@ public sealed class ModEntry : Mod
                     if (isMineAction)
                     {
                         bool upgraded = mineExpeditionManager!.HasActiveExpedition;
-                        MineExpedition expedition = mineExpeditionManager!.Accept(proposal, npc, decision, sourceTurnId);
+                        MineExpedition? expedition = TryAcceptMineProposal(npc, proposal, sourceTurnId, playerInput);
+                        if (expedition is null) return;
                         Game1.addHUDMessage(new HUDMessage(
                             upgraded
                                 ? $"已为 {npc.displayName} 的同行任务追加能力：{proposal.Action}。"
@@ -933,7 +1152,7 @@ public sealed class ModEntry : Mod
                     }
                     else if (isMeeting)
                     {
-                        meetingManager!.Accept(proposal, npc, decision, sourceTurnId);
+                        if (meetingManager!.Accept(proposal, npc, decision, sourceTurnId) is null) return;
                         Game1.addHUDMessage(new HUDMessage(
                             $"已和 {npc.displayName} 约好见面，到时会通知你。"
                         ));
@@ -1011,7 +1230,7 @@ public sealed class ModEntry : Mod
         OpenChatInput(npc);
     }
 
-    private void OpenChatInput(NPC npc)
+    private void OpenChatInput(NPC npc, string draft = "")
     {
         if (!Context.IsWorldReady || !IsActiveChatNpc(npc))
         {
@@ -1022,8 +1241,45 @@ public sealed class ModEntry : Mod
             npc,
             playerInput => SubmitContinuousChat(npc, playerInput),
             EndChatSession,
-            Config.EnableNativeImeCandidateWindow
+            Config.EnableNativeImeCandidateWindow,
+            text => Game1.activeClickableMenu = new NpcDialogueHistoryMenu(npc, () => OpenChatInput(npc, text)),
+            draft,
+            meetingManager?.HasActiveMeeting(npc.Name) == true ? () => ShowEndMeetingConfirmation(npc, "结束约会") : null,
+            Config.MaxChatInputCharacters,
+            meetingManager?.CanJoinTravel(npc) == true ? () => ShowJoinMeetingConfirmation(npc) : null
         );
+    }
+
+    private void ShowJoinMeetingConfirmation(NPC npc)
+    {
+        Game1.currentLocation.createQuestionDialogue("现在开始这次约会，一起走吗？",
+            new[] { new Response("join", "一起过去"), new Response("wait", "按原计划见面") },
+            (_, answer) =>
+            {
+                if (answer == "join" && meetingManager?.JoinTravel(npc) == true)
+                {
+                    const string reply = "好，那我们一起走吧。";
+                    DailyDialogueJournal.Append(npc.Name, Game1.timeOfDay, "一起过去吧", reply);
+                    AddConversationMessage("assistant", reply);
+                    ShowNpcDialogue(npc, reply, () => OpenChatInput(npc));
+                }
+                else OpenChatInput(npc);
+            });
+    }
+
+    private void ShowEndMeetingConfirmation(NPC npc, string input)
+    {
+        Game1.currentLocation.createQuestionDialogue("结束这次约会，让对方回去吗？",
+            new[] { new Response("end", "结束约会"), new Response("stay", "继续约会") },
+            (_, answer) =>
+            {
+                if (answer == "end" && meetingManager?.EndForNpc(npc.Name, input) == true)
+                {
+                    DailyDialogueJournal.Append(npc.Name, Game1.timeOfDay, input, "好，今天就到这里吧，我先回去了。");
+                    ShowNpcDialogue(npc, "好，今天就到这里吧，我先回去了。", EndChatSession);
+                }
+                else OpenChatInput(npc);
+            });
     }
 
     private void SubmitContinuousChat(NPC npc, string playerInput)
@@ -1046,6 +1302,7 @@ public sealed class ModEntry : Mod
 
     private void EndChatSession()
     {
+        if (activeChatNpc is not null && Context.IsWorldReady) meetingManager?.ResumeAfterDialogue(activeChatNpc.Name);
         activeChatNpc = null;
         conversationHistory.Clear();
     }
@@ -1145,7 +1402,9 @@ public sealed class ModEntry : Mod
         Dialogue dialogue = new(npc, null, text);
         if (onFinish is not null)
             dialogue.onFinish = onFinish;
-        Game1.activeClickableMenu = new DialogueBox(dialogue);
+        DialogueBox box = new(dialogue);
+        VanillaDialogueObserver.MarkGenerated(box);
+        Game1.activeClickableMenu = box;
     }
 
     private static string ApplyPortraitEmotion(string reply, string emotion)

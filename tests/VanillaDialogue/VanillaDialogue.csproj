@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../Valewake/VanillaDialogueJournal.cs" Link="VanillaDialogueJournal.cs" />
+    <Compile Include="../../Valewake/VanillaDialogueObserver.cs" Link="VanillaDialogueObserver.cs" />
+  </ItemGroup>
+</Project>

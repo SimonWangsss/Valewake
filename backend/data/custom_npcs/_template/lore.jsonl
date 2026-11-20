@@ -1,0 +1,2 @@
+{"id":"yourpack.background.01","title":"Background example","text":"Replace this placeholder with a sourced character fact.","tags":["identity"],"content_kind":"canonical_fact","conditions":{}}
+{"id":"yourpack.event.01","title":"Event-gated example","text":"Replace this with an event fact that should only be available after the event.","tags":["relationships"],"content_kind":"experienced_event","conditions":{"min_hearts":4,"seen_event_ids":["REPLACE_WITH_REAL_EVENT_ID"]}}
